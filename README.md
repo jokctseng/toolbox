@@ -125,7 +125,8 @@ with check (
     'qa_activities',
     'co_activities',
     'otp_store',
-    'sessions'
+    'sessions',
+    'local_ai_settings'
   )
   or key like 'co_notes_%'
   or key like 'co_charts_%'
@@ -145,7 +146,8 @@ using (
     'qa_activities',
     'co_activities',
     'otp_store',
-    'sessions'
+    'sessions',
+    'local_ai_settings'
   )
   or key like 'co_notes_%'
   or key like 'co_charts_%'
@@ -160,7 +162,8 @@ with check (
     'qa_activities',
     'co_activities',
     'otp_store',
-    'sessions'
+    'sessions',
+    'local_ai_settings'
   )
   or key like 'co_notes_%'
   or key like 'co_charts_%'
@@ -180,7 +183,8 @@ using (
     'qa_activities',
     'co_activities',
     'otp_store',
-    'sessions'
+    'sessions',
+    'local_ai_settings'
   )
   or key like 'co_notes_%'
   or key like 'co_charts_%'
@@ -286,7 +290,14 @@ Then open the preview URL and make sure the homepage renders before pushing to G
 
 ## Current Feature Notes
 
-The Q&A word cloud grouping now uses a no-cost in-browser heuristic grouping flow, so the button works without an API key. It is intentionally lightweight: it groups by repeated keywords / concepts and lets the host confirm before publishing.
+The Q&A word cloud grouping has two local modes:
+
+- Quick grouping: no download, no API key, uses in-browser keyword heuristics.
+- Local Gemma / MediaPipe model: uses Google AI Edge MediaPipe LLM Inference in the browser. The recommended selectable model is `litert-community/gemma-4-E2B-it-litert-lm`, specifically its `gemma-4-E2B-it-web.task` file hosted on Hugging Face. The model stays outside this repo and is fetched from Hugging Face at runtime, then cached by the browser when storage policies allow it.
+
+Why this model: the Gemma 4 collection includes E2B, E4B, 26B A4B, and 31B variants. For this static workshop toolbox, E2B IT Web is the practical choice because it is instruction-tuned, Web/LiteRT-LM-ready, and much lighter than E4B/26B/31B while still supporting multilingual text tasks. The Hugging Face LiteRT model card lists the web `.task` file at about 2 GB and documents Chrome/WebGPU usage.
+
+If WebGPU or model loading fails, the app automatically falls back to quick grouping.
 
 The strategy board runs CSV/JSON analysis in the browser and can produce:
 
@@ -296,7 +307,7 @@ The strategy board runs CSV/JSON analysis in the browser and can produce:
 - Bivariate scatter plots
 - Multivariate grouped summary tables
 
-For future fully local AI grouping, you can add a WebGPU/WebLLM-style model runner and use a small open model such as Gemma, but that requires a separate model download UX and browser capability checks. This repo currently keeps the default path zero-cost and static-host friendly.
+For privacy-sensitive workshops, prefer hosting the model yourself and checking the model license terms before use.
 
 ## Sources And References
 
@@ -306,6 +317,7 @@ This project is intentionally built from broadly available web platform pieces s
 - Vite: fast local dev server and static production build — https://vite.dev/
 - GitHub Pages with GitHub Actions: static deployment target and workflow runner — https://docs.github.com/pages
 - Supabase: hosted Postgres, Auth, Realtime, Row Level Security — https://supabase.com/docs
+- Hugging Face Gemma 4 collection and model cards: model selection for Gemma 4 E2B / E4B / 26B / 31B and LiteRT Web packaging — https://huggingface.co/collections/google/gemma-4 and https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm
 - Web Crypto API: browser-native random values and SHA-256 hashing for demo OTP internals — https://developer.mozilla.org/docs/Web/API/Web_Crypto_API
 - Service Worker API: timer notification support and static asset caching — https://developer.mozilla.org/docs/Web/API/Service_Worker_API
 

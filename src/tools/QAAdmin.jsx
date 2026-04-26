@@ -9,6 +9,16 @@ import {
 } from '../components/UI.jsx';
 import { useLang, nav } from '../App.jsx';
 import AdminLogin from '../components/AdminLogin.jsx';
+import {
+  cacheModelAsset,
+  getLocalAiCapability,
+  getLocalAiSettings,
+  groupResponsesWithLocalModel,
+  heuristicGroupResponses,
+  LOCAL_AI_MODELS,
+  saveLocalAiSettings,
+  warmLocalModel,
+} from '../localAi.js';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 const MAX_ACTIVITIES = 10;
@@ -529,6 +539,9 @@ function ActivityEditor({ actId, onBack }) {
   const [addQType, setAddQType] = useState(null);
   const [aiLoading, setAiLoading] = useState(null); // question id
   const [aiError, setAiError] = useState('');
+  const [aiSettings, setAiSettings] = useState(getLocalAiSettings);
+  const [aiStatus, setAiStatus] = useState('');
+  const [aiProgress, setAiProgress] = useState(null);
   const [exportQ, setExportQ] = useState(null);
   const [saved, setSaved] = useState(false);
 
@@ -567,6 +580,38 @@ function ActivityEditor({ actId, onBack }) {
     updateAct({ questions: act.questions.map(q => q.id === id ? { ...q, open: !q.open } : q) });
   };
 
+  const updateAiSettings = (patch) => {
+    const next = saveLocalAiSettings({ ...aiSettings, ...patch });
+    setAiSettings(next);
+  };
+
+  const selectAiModel = (modelId) => {
+    const model = LOCAL_AI_MODELS.find(m => m.id === modelId) || LOCAL_AI_MODELS[0];
+    updateAiSettings({ modelId: model.id, modelUrl: model.modelUrl });
+  };
+
+  const checkLocalAi = async () => {
+    const cap = await getLocalAiCapability();
+    setAiStatus(cap.webGpu
+      ? (lang === 'zh' ? '此瀏覽器支援 WebGPU，可嘗試載入本機模型。' : 'WebGPU is available. Local model can be loaded.')
+      : (lang === 'zh' ? '此瀏覽器未開放 WebGPU，會使用快速分組。' : 'WebGPU is not available; quick grouping will be used.'));
+  };
+
+  const preloadLocalModel = async () => {
+    setAiError('');
+    setAiProgress(null);
+    try {
+      setAiStatus(lang === 'zh' ? '正在下載/檢查模型快取...' : 'Downloading/checking model cache...');
+      await cacheModelAsset(aiSettings.modelUrl, p => setAiProgress(p));
+      setAiStatus(lang === 'zh' ? '正在載入本機模型...' : 'Loading local model...');
+      await warmLocalModel(aiSettings);
+      setAiStatus(lang === 'zh' ? '本機模型已準備完成。' : 'Local model is ready.');
+    } catch (e) {
+      setAiError(e.message || String(e));
+      setAiStatus(lang === 'zh' ? '本機模型尚未可用，會使用快速分組。' : 'Local model unavailable; quick grouping will be used.');
+    }
+  };
+
   const moveQuestion = (idx, dir) => {
     const to = idx + dir;
     if (to < 0 || to >= (act.questions || []).length) return;
@@ -586,22 +631,19 @@ function ActivityEditor({ actId, onBack }) {
     }
     setAiLoading(qId);
     setAiError('');
-    const tokenOf = (text) => {
-      const cleaned = text.toLowerCase().replace(/[^\p{Script=Han}\p{Letter}\p{Number}\s]/gu, ' ').trim();
-      const words = cleaned.split(/\s+/).filter(w => w.length > 1);
-      if (words.length) return words.sort((a, b) => b.length - a.length)[0];
-      return cleaned.slice(0, 2) || (lang === 'zh' ? '其他' : 'Other');
-    };
-    const grouped = new Map();
-    entries.forEach(item => {
-      const key = tokenOf(item);
-      grouped.set(key, [...(grouped.get(key) || []), item]);
-    });
-    const groups = [...grouped.entries()]
-      .sort((a, b) => b[1].length - a[1].length)
-      .slice(0, 8)
-      .map(([name, items]) => ({ name, items }));
-    updateQuestion({ ...q, groupResult: groups, aiGroupDone: false });
+    try {
+      const groups = aiSettings.mode === 'gemma'
+        ? await groupResponsesWithLocalModel(entries, aiSettings, lang)
+        : heuristicGroupResponses(entries, lang);
+      updateQuestion({ ...q, groupResult: groups, aiGroupDone: false });
+      setAiStatus(aiSettings.mode === 'gemma'
+        ? (lang === 'zh' ? '已使用本機模型完成分組。' : 'Grouped with the local model.')
+        : (lang === 'zh' ? '已使用快速分組。' : 'Grouped with quick grouping.'));
+    } catch (e) {
+      const groups = heuristicGroupResponses(entries, lang);
+      updateQuestion({ ...q, groupResult: groups, aiGroupDone: false });
+      setAiError(`${lang === 'zh' ? '本機模型分組失敗，已改用快速分組：' : 'Local model failed; quick grouping used: '}${e.message || e}`);
+    }
     setAiLoading(null);
   };
 
@@ -813,6 +855,55 @@ function ActivityEditor({ actId, onBack }) {
                     <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
                       🤖 {lang === 'zh' ? 'AI 分組' : 'AI Grouping'}
                     </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+                      <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)' }}>
+                        {lang === 'zh' ? '分組模式' : 'Grouping mode'}
+                      </label>
+                      <select value={aiSettings.mode} onChange={e => updateAiSettings({ mode: e.target.value })}
+                        style={{ padding: '7px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--text)' }}>
+                        <option value="heuristic">{lang === 'zh' ? '快速分組（免下載）' : 'Quick grouping (no download)'}</option>
+                        <option value="gemma">{lang === 'zh' ? '本機 Gemma / MediaPipe 模型' : 'Local Gemma / MediaPipe model'}</option>
+                      </select>
+                      {aiSettings.mode === 'gemma' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)' }}>
+                            {lang === 'zh' ? '本機模型' : 'Local model'}
+                          </label>
+                          <select value={aiSettings.modelId || LOCAL_AI_MODELS[0].id} onChange={e => selectAiModel(e.target.value)}
+                            style={{ padding: '7px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--text)', fontSize: 12 }}>
+                            {LOCAL_AI_MODELS.map(model => (
+                              <option key={model.id} value={model.id}>
+                                {model.shortLabel} · {model.size}
+                              </option>
+                            ))}
+                          </select>
+                          <p style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                            {lang === 'zh'
+                              ? '推薦使用 Hugging Face 上的 LiteRT-LM Web 模型，不會放進 repo；首次載入會下載大型模型並由瀏覽器快取。'
+                              : 'Uses the Hugging Face LiteRT-LM web model outside this repo. First load downloads a large model and caches it in the browser.'}
+                          </p>
+                          <code style={{ fontSize: 11, color: 'var(--text-3)', wordBreak: 'break-all', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: 6 }}>
+                            {aiSettings.modelUrl}
+                          </code>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <Btn size="sm" variant="ghost" onClick={checkLocalAi}>
+                              {lang === 'zh' ? '檢查支援' : 'Check support'}
+                            </Btn>
+                            <Btn size="sm" variant="ghost" onClick={preloadLocalModel}>
+                              {lang === 'zh' ? '下載/載入模型' : 'Download/load model'}
+                            </Btn>
+                          </div>
+                          {aiProgress && (
+                            <p style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                              {aiProgress.cached
+                                ? (lang === 'zh' ? '模型已在瀏覽器快取中。' : 'Model already cached.')
+                                : `${lang === 'zh' ? '下載進度' : 'Download'} ${aiProgress.pct || 0}%`}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {aiStatus && <p style={{ fontSize: 12, color: 'var(--text-2)' }}>{aiStatus}</p>}
+                    </div>
                     {aiError && <p style={{ color: 'var(--danger)', fontSize: 12, marginBottom: 8 }}>{aiError}</p>}
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <Btn size="sm" onClick={() => runAIGroup(q.id)} loading={aiLoading === q.id}>
