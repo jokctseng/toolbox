@@ -5,10 +5,30 @@ import { Btn, Card, Modal, Badge, SectionHead, NumInp, Confirm, Empty } from '..
 import { useLang } from '../App.jsx';
 import { useEffect } from 'react';
 
-const DEFAULTS = { callCount: 1, waitingMax: 3 };
+const DEFAULTS = { callCount: 1, waitingMax: 3, fillMode: 'replace', skipMode: 'end', skipAfter: '' };
 
-function loadQ() { return db.get('queue', { master: [], waiting: [], calling: [], done: [], settings: DEFAULTS }); }
+function loadQ() {
+  const q = db.get('queue', { all: [], master: [], waiting: [], calling: [], done: [], settings: DEFAULTS });
+  return {
+    all: q.all || [...(q.done || []), ...(q.calling || []), ...(q.waiting || []), ...(q.master || [])],
+    master: q.master || [],
+    waiting: q.waiting || [],
+    calling: q.calling || [],
+    done: q.done || [],
+    settings: { ...DEFAULTS, ...(q.settings || {}) },
+  };
+}
 function saveQ(q) { db.set('queue', q); broadcast('queue_update', q); }
+
+function parsePerson(label) {
+  const raw = String(label || '').trim();
+  const parts = raw.split(/[,，\t ]+/).filter(Boolean);
+  return { id: uid(), label: raw, number: parts[0] || raw, name: parts.slice(1).join(' ') };
+}
+
+const personNumber = (p) => p.number || parsePerson(p.label).number;
+const personName = (p) => p.name || parsePerson(p.label).name;
+const personLabel = (p) => [personNumber(p), personName(p)].filter(Boolean).join(' ');
 
 function PersonCard({ person, actions, size = 'md', highlight }) {
   return (
@@ -21,7 +41,7 @@ function PersonCard({ person, actions, size = 'md', highlight }) {
       fontSize: size === 'lg' ? 18 : 14,
     }}>
       <span style={{ fontWeight: highlight ? 700 : 500, color: highlight ? 'var(--accent)' : 'var(--text)', flex: 1 }}>
-        {person.label}
+        {personLabel(person)}
       </span>
       {actions && <div style={{ display: 'flex', gap: 4 }}>{actions}</div>}
     </div>
@@ -49,8 +69,9 @@ export default function Queue() {
 
   const addPerson = (label) => {
     if (!label.trim()) return;
-    const p = { id: uid(), label: label.trim() };
+    const p = parsePerson(label);
     const next = clone(q);
+    next.all = [...(next.all || []), p];
     next.master.push(p);
     // Auto-fill waiting if space
     fillWaiting(next);
@@ -67,12 +88,12 @@ export default function Queue() {
   const callNext = () => {
     const next = clone(q);
     const count = next.settings?.callCount ?? DEFAULTS.callCount;
-    // Move calling → done
-    next.done = [...next.calling, ...next.done];
-    next.calling = [];
-    // Move from waiting → calling
-    const toCall = next.waiting.splice(0, count);
-    next.calling = toCall;
+    const missing = settings.fillMode === 'topUp' ? Math.max(0, count - next.calling.length) : count;
+    if (settings.fillMode !== 'topUp') {
+      next.done = [...next.calling, ...next.done];
+      next.calling = [];
+    }
+    next.calling = [...next.calling, ...next.waiting.splice(0, missing)];
     fillWaiting(next);
     update(next);
   };
@@ -92,7 +113,14 @@ export default function Queue() {
     const idx = next.calling.findIndex(p => p.id === id);
     if (idx === -1) return;
     const [p] = next.calling.splice(idx, 1);
-    next.master.push(p);
+    const skipMode = next.settings?.skipMode || DEFAULTS.skipMode;
+    if (skipMode === 'after' && next.settings?.skipAfter) {
+      const after = String(next.settings.skipAfter).trim();
+      const pos = next.master.findIndex(item => personNumber(item) === after || String(item.label) === after);
+      next.master.splice(pos >= 0 ? pos + 1 : next.master.length, 0, p);
+    } else {
+      next.master.push(p);
+    }
     fillWaiting(next);
     update(next);
   };
@@ -107,7 +135,11 @@ export default function Queue() {
     const names = parseNameList(importText);
     if (!names.length) return;
     const next = clone(q);
-    names.forEach(label => next.master.push({ id: uid(), label }));
+    names.forEach(label => {
+      const p = parsePerson(label);
+      next.all = [...(next.all || []), p];
+      next.master.push(p);
+    });
     fillWaiting(next);
     update(next);
     setImportText('');
@@ -115,7 +147,7 @@ export default function Queue() {
   };
 
   const doReset = () => {
-    const fresh = { master: [], waiting: [], calling: [], done: [], settings: q.settings || DEFAULTS };
+    const fresh = { all: [], master: [], waiting: [], calling: [], done: [], settings: { ...DEFAULTS, ...(q.settings || {}) } };
     update(fresh);
   };
 
@@ -128,7 +160,7 @@ export default function Queue() {
     e.target.value = '';
   };
 
-  const settings = q.settings || DEFAULTS;
+  const settings = { ...DEFAULTS, ...(q.settings || {}) };
 
   const updateSettings = (key, val) => {
     const next = clone(q);
@@ -157,8 +189,8 @@ export default function Queue() {
             ) : (
               q.calling.map(p => (
                 <div key={p.id} style={{ fontSize: 'clamp(28px,6vw,56px)', fontWeight: 800,
-                  color: '#fff', fontFamily: 'var(--font-display)', lineHeight: 1.2, marginBottom: 4 }}>
-                  {p.label}
+                  color: '#fff', fontFamily: 'var(--font-body)', lineHeight: 1.2, marginBottom: 4 }}>
+                  {personNumber(p)}
                 </div>
               ))
             )}
@@ -209,6 +241,33 @@ export default function Queue() {
             onChange={v => updateSettings('callCount', v)} />
           <NumInp label={t('qReadyCount')} value={settings.waitingMax} min={1} max={20}
             onChange={v => updateSettings('waitingMax', v)} />
+          <div>
+            <label style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-2)', display: 'block', marginBottom: 6 }}>
+              {lang === 'zh' ? '叫下一位模式' : 'Call-next mode'}
+            </label>
+            <select value={settings.fillMode} onChange={e => updateSettings('fillMode', e.target.value)}
+              style={{ padding: '9px 12px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)' }}>
+              <option value="replace">{lang === 'zh' ? '整批替換叫號區' : 'Replace calling group'}</option>
+              <option value="topUp">{lang === 'zh' ? '優先補滿叫號區' : 'Top up calling group'}</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-2)', display: 'block', marginBottom: 6 }}>
+              {lang === 'zh' ? '過號退回' : 'Skip return'}
+            </label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <select value={settings.skipMode} onChange={e => updateSettings('skipMode', e.target.value)}
+                style={{ padding: '9px 12px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)' }}>
+                <option value="end">{lang === 'zh' ? '放到最後' : 'Send to end'}</option>
+                <option value="after">{lang === 'zh' ? '放到指定編號後' : 'After number'}</option>
+              </select>
+              {settings.skipMode === 'after' && (
+                <input value={settings.skipAfter} onChange={e => updateSettings('skipAfter', e.target.value)}
+                  placeholder={lang === 'zh' ? '編號' : 'No.'}
+                  style={{ width: 90, padding: '9px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)' }} />
+              )}
+            </div>
+          </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Btn onClick={() => setShowImport(true)} variant="secondary" size="sm">
               📂 {t('qImport')}
@@ -265,8 +324,8 @@ export default function Queue() {
               marginBottom: 12, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', alignItems: 'center', gap: 14,
               boxShadow: 'var(--shadow)',
             }}>
-              <span style={{ fontSize: 'clamp(24px, 4vw, 42px)', fontWeight: 800, color: '#fff', fontFamily: 'var(--font-display)', lineHeight: 1.1, wordBreak: 'break-word' }}>
-                {p.label}
+              <span style={{ fontSize: 'clamp(30px, 6vw, 64px)', fontWeight: 900, color: '#fff', fontFamily: 'var(--font-body)', lineHeight: 1.05, wordBreak: 'break-word' }}>
+                {personNumber(p)}
               </span>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                 <button onClick={() => markDone(p.id)} style={{
@@ -291,7 +350,7 @@ export default function Queue() {
                   display: 'inline-block', padding: '2px 8px', margin: '2px',
                   background: 'var(--success-light)', color: 'var(--success)',
                   borderRadius: 100, fontSize: 12,
-                }}>{p.label}</span>
+                }}>{personNumber(p)}</span>
               ))}
               {q.done.length > 10 && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
                 +{q.done.length - 10}
@@ -308,16 +367,23 @@ export default function Queue() {
           borderRadius: 'var(--radius)', cursor: 'pointer', fontWeight: 700, color: 'var(--text-2)',
           boxShadow: 'var(--shadow-sm)',
         }}>
-          📄 {t('qTotalList')} ({q.master.length})
+          📄 {t('qTotalList')} ({(q.all || []).length})
         </summary>
         <Card style={{ maxHeight: 280, overflow: 'auto', marginTop: 8 }}>
-          {q.master.length === 0 ? <p style={{ fontSize: 13, color: 'var(--text-3)' }}>{t('qEmpty')}</p> :
-            q.master.map(p => (
-              <PersonCard key={p.id} person={p} actions={[
-                <button key="del" onClick={() => removeFromMaster(p.id)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 14 }}>✕</button>
-              ]} />
-            ))
+          {(q.all || []).length === 0 ? <p style={{ fontSize: 13, color: 'var(--text-3)' }}>{t('qEmpty')}</p> :
+            (q.all || []).map(p => {
+              const state = q.done.some(x => x.id === p.id) ? (lang === 'zh' ? '完成' : 'Done')
+                : q.calling.some(x => x.id === p.id) ? (lang === 'zh' ? '叫號中' : 'Calling')
+                : q.waiting.some(x => x.id === p.id) ? (lang === 'zh' ? '候叫' : 'Waiting')
+                : (lang === 'zh' ? '未叫號' : 'Queued');
+              return (
+                <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '100px 1fr 80px', gap: 8, padding: '8px 10px', borderBottom: '1px solid var(--border)', fontSize: 13 }}>
+                  <strong>{personNumber(p)}</strong>
+                  <span>{personName(p) || '—'}</span>
+                  <Badge color="gray">{state}</Badge>
+                </div>
+              );
+            })
           }
         </Card>
       </details>

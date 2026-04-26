@@ -37,7 +37,13 @@ function computeRemaining(timer) {
   return 0;
 }
 
-function TimerCard({ timer, onUpdate, onDelete, lang }) {
+function playFinishSound(type) {
+  [0, 650, 1300].forEach(delay => {
+    window.setTimeout(() => playSound(type), delay);
+  });
+}
+
+function TimerCard({ timer, onUpdate, onDelete, onFullscreen, lang }) {
   const t = k => ({ zh: { start:'開始', pause:'暫停', resume:'繼續', reset:'重設', running:'運行中',
     paused:'已暫停', reminding:'提醒中', finished:'時間到！', idle:'待機',
     remind:'提前提醒', sound:'鈴聲提醒', flash:'變色閃爍', name:'計時器名稱',
@@ -77,7 +83,7 @@ function TimerCard({ timer, onUpdate, onDelete, lang }) {
     }
     if (timer.state === 'finished' && !soundedFinish.current) {
       soundedFinish.current = true;
-      if (timer.remindSound !== 'none') playSound(timer.remindSound);
+      if (timer.remindSound !== 'none') playFinishSound(timer.remindSound);
     }
     if (timer.state === 'idle') {
       soundedRemind.current = false;
@@ -177,6 +183,11 @@ function TimerCard({ timer, onUpdate, onDelete, lang }) {
           {timer.state !== 'idle' && (
             <Btn onClick={handleReset} size="sm" variant="ghost">↺ {t('reset')}</Btn>
           )}
+          {(timer.state === 'running' || timer.state === 'reminding' || timer.state === 'paused') && (
+            <Btn onClick={() => onFullscreen(timer.id)} size="sm" variant="ghost">
+              ⛶
+            </Btn>
+          )}
           {(timer.state === 'idle' || timer.state === 'finished') && (
             <Btn onClick={() => { setDraft(clone(timer)); setEditing(true); }} size="sm" variant="ghost">✏️</Btn>
           )}
@@ -244,14 +255,67 @@ function TimerCard({ timer, onUpdate, onDelete, lang }) {
   );
 }
 
+function FullscreenTimer({ timer, onClose, onPause, onResume, onReset, lang }) {
+  if (!timer) return null;
+  const remaining = computeRemaining(timer);
+  const totalSecs = toSeconds(timer.duration.h, timer.duration.m, timer.duration.s);
+  const progress = totalSecs > 0 ? Math.max(0, Math.min(1, remaining / totalSecs)) : 0;
+  const stateText = {
+    running: lang === 'zh' ? '運行中' : 'Running',
+    reminding: lang === 'zh' ? '提醒中' : 'Reminder',
+    paused: lang === 'zh' ? '已暫停' : 'Paused',
+    finished: lang === 'zh' ? '時間到' : "Time's Up",
+  }[timer.state] || '';
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 2000,
+      background: timer.state === 'finished' ? 'var(--danger-light)' : 'var(--bg)',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      padding: 24,
+      animation: timer.state === 'finished' && timer.remindFlash ? 'flash 0.6s ease infinite' : undefined,
+    }}>
+      <button onClick={onClose} style={{
+        position: 'absolute', top: 18, right: 18, border: '1px solid var(--border)',
+        background: 'var(--surface)', color: 'var(--text)', borderRadius: 10,
+        padding: '8px 12px', fontSize: 18,
+      }}>✕</button>
+      <p style={{ fontSize: 'clamp(18px, 3vw, 32px)', color: 'var(--text-2)', marginBottom: 8 }}>{timer.name}</p>
+      <div style={{
+        fontFamily: 'var(--font-body)',
+        fontSize: 'clamp(76px, 19vw, 240px)',
+        fontWeight: 900,
+        lineHeight: 1,
+        color: timer.state === 'finished' ? 'var(--danger)' : 'var(--accent)',
+        fontVariantNumeric: 'tabular-nums',
+        letterSpacing: 0,
+      }}>
+        {timer.state === 'finished' ? stateText : formatTime(remaining)}
+      </div>
+      <p style={{ fontSize: 'clamp(16px, 2.5vw, 28px)', color: 'var(--text-2)', marginTop: 16 }}>{stateText}</p>
+      <div style={{ width: 'min(760px, 86vw)', height: 14, background: 'var(--surface-2)', borderRadius: 99, overflow: 'hidden', marginTop: 28 }}>
+        <div style={{ width: `${progress * 100}%`, height: '100%', background: 'var(--accent)', transition: 'width 1s linear' }} />
+      </div>
+      <div style={{ display: 'flex', gap: 10, marginTop: 28, flexWrap: 'wrap', justifyContent: 'center' }}>
+        {(timer.state === 'running' || timer.state === 'reminding') && <Btn onClick={onPause} size="lg" variant="secondary">{lang === 'zh' ? '暫停' : 'Pause'}</Btn>}
+        {timer.state === 'paused' && <Btn onClick={onResume} size="lg">{lang === 'zh' ? '繼續' : 'Resume'}</Btn>}
+        <Btn onClick={onReset} size="lg" variant="ghost">{lang === 'zh' ? '重設' : 'Reset'}</Btn>
+      </div>
+    </div>
+  );
+}
+
 export default function Countdown() {
   const { t, lang } = useLang();
   const [timers, setTimers] = useState(loadTimers);
+  const [, setNow] = useState(Date.now());
+  const [fullscreenId, setFullscreenId] = useState(null);
   const intervalRef = useRef(null);
 
   // Tick every second to re-render & check states
   useEffect(() => {
     intervalRef.current = setInterval(() => {
+      setNow(Date.now());
       setTimers(prev => {
         let changed = false;
         const next = prev.map(timer => {
@@ -273,7 +337,7 @@ export default function Countdown() {
         if (changed) saveTimers(next);
         return changed ? next : prev;
       });
-    }, 500);
+    }, 1000);
     return () => clearInterval(intervalRef.current);
   }, []);
 
@@ -287,6 +351,12 @@ export default function Countdown() {
 
   const deleteTimer = (id) => {
     setTimers(prev => { const next = prev.filter(t => t.id !== id); saveTimers(next); return next; });
+  };
+
+  const fullscreenTimer = timers.find(t => t.id === fullscreenId);
+  const updateFullscreen = (patch) => {
+    if (!fullscreenTimer) return;
+    updateTimer({ ...fullscreenTimer, ...patch });
   };
 
   const addTimer = () => {
@@ -331,8 +401,8 @@ export default function Countdown() {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px,1fr))', gap: 16 }}>
           {timers.map(timer => (
-            <TimerCard key={timer.id} timer={timer} onUpdate={updateTimer}
-              onDelete={() => deleteTimer(timer.id)} lang={lang} />
+              <TimerCard key={timer.id} timer={timer} onUpdate={updateTimer}
+              onDelete={() => deleteTimer(timer.id)} onFullscreen={setFullscreenId} lang={lang} />
           ))}
         </div>
       )}
@@ -342,6 +412,19 @@ export default function Countdown() {
           <Btn variant="ghost" onClick={addTimer}>+ {t('cdAdd')} ({timers.length}/3)</Btn>
         </div>
       )}
+
+      <FullscreenTimer
+        timer={fullscreenTimer}
+        lang={lang}
+        onClose={() => setFullscreenId(null)}
+        onPause={() => updateFullscreen({ state: 'paused', remaining: computeRemaining(fullscreenTimer), startedAt: null })}
+        onResume={() => updateFullscreen({ state: 'running', startedAt: Date.now() })}
+        onReset={() => {
+          const secs = toSeconds(fullscreenTimer.duration.h, fullscreenTimer.duration.m, fullscreenTimer.duration.s);
+          updateFullscreen({ state: 'idle', remaining: secs, startedAt: null, pausedAt: null });
+          setFullscreenId(null);
+        }}
+      />
     </div>
   );
 }

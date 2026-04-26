@@ -5,7 +5,7 @@ import { Btn, Card, Badge, Tabs, Modal, Spinner } from '../components/UI.jsx';
 import { useLang } from '../App.jsx';
 
 function JoinScreen({ onJoin, lang }) {
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState(() => new URLSearchParams((window.location.hash.split('?')[1] || '')).get('code') || '');
   const [nick, setNick] = useState('');
   const [err, setErr] = useState('');
 
@@ -98,8 +98,7 @@ function QnASection({ act, userId, nick, lang }) {
     return scoreB - scoreA || a.ts - b.ts;
   });
 
-  const post = (parentId = null) => {
-    const content = parentId ? text : text;
+  const post = (parentId = null, content = text) => {
     if (!content.trim()) return;
     const updated = clone(act);
     updated.posts = updated.posts || [];
@@ -153,9 +152,9 @@ function QnASection({ act, userId, nick, lang }) {
                 {p.edited && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>（edited）</span>}
               </div>
               {editId === p.id ? (
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <input value={editText} onChange={e => setEditText(e.target.value)}
-                    style={{ flex: 1, padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14 }} />
+                <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                  <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={3}
+                    style={{ flex: 1, padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14, resize: 'vertical', fontFamily: 'var(--font-body)' }} />
                   <Btn size="sm" onClick={() => editPost(p.id)}>{lang === 'zh' ? '儲存' : 'Save'}</Btn>
                   <Btn size="sm" variant="ghost" onClick={() => setEditId(null)}>{lang === 'zh' ? '取消' : 'Cancel'}</Btn>
                 </div>
@@ -187,10 +186,10 @@ function QnASection({ act, userId, nick, lang }) {
         </div>
         {replyTo === p.id && (
           <div style={{ marginLeft: 16, marginTop: 6, display: 'flex', gap: 6 }}>
-            <input value={text} onChange={e => setText(e.target.value)}
+            <textarea value={text} onChange={e => setText(e.target.value)} rows={2}
               placeholder={lang === 'zh' ? '回覆…' : 'Reply…'}
-              onKeyDown={e => e.key === 'Enter' && post(p.id)}
-              style={{ flex: 1, padding: '7px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14 }} />
+              onKeyDown={e => (e.metaKey || e.ctrlKey) && e.key === 'Enter' && post(p.id)}
+              style={{ flex: 1, padding: '7px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14, resize: 'vertical', fontFamily: 'var(--font-body)' }} />
             <Btn size="sm" onClick={() => post(p.id)}>{lang === 'zh' ? '送出' : 'Post'}</Btn>
             <Btn size="sm" variant="ghost" onClick={() => setReplyTo(null)}>✕</Btn>
           </div>
@@ -204,11 +203,11 @@ function QnASection({ act, userId, nick, lang }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-        <input value={replyTo ? '' : text} onChange={e => setText(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && !replyTo && post()}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20, alignItems: 'flex-start' }}>
+        <textarea value={replyTo ? '' : text} onChange={e => setText(e.target.value)} rows={3}
+          onKeyDown={e => (e.metaKey || e.ctrlKey) && e.key === 'Enter' && !replyTo && post()}
           placeholder={lang === 'zh' ? '輸入您的問題或留言…' : 'Ask a question or comment…'}
-          style={{ flex: 1, padding: '10px 14px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', fontSize: 14 }} />
+          style={{ flex: 1, padding: '10px 14px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', fontSize: 14, resize: 'vertical', fontFamily: 'var(--font-body)' }} />
         <Btn onClick={() => !replyTo && post()}>
           {lang === 'zh' ? '發問' : 'Post'}
         </Btn>
@@ -260,6 +259,11 @@ function PollQuestion({ q, act, userId, lang }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {q.multiSelect && (
+        <p style={{ fontSize: 12, color: 'var(--text-2)' }}>
+          {lang === 'zh' ? `此題可複選，最多選 ${q.maxSelect || q.options?.length || 1} 項。` : `Multiple choices allowed. Select up to ${q.maxSelect || q.options?.length || 1}.`}
+        </p>
+      )}
       {(q.options || []).map(opt => {
         const count = counts[opt] || 0;
         const pct = total > 0 ? Math.round(count / total * 100) : 0;
@@ -489,7 +493,7 @@ function ChallengeQuestion({ q, act, userId, lang }) {
       const ans = answers[i];
       if (ans === undefined) return;
       if (q.hasAnswer) {
-        if (Number(ans) === Number(cq.answer)) total += cq.score || 1;
+        if (Number(ans) === Number(cq.answer)) total += Number(cq.options?.[cq.answer]?.score ?? 1);
       } else {
         const opt = (cq.options || [])[Number(ans)];
         total += opt?.score || 0;

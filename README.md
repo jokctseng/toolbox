@@ -130,6 +130,8 @@ with check (
   or key like 'co_notes_%'
   or key like 'co_charts_%'
   or key like 'co_dashboard_%'
+  or key like 'co_dash_votes_%'
+  or key like 'co_datasets_%'
 );
 
 create policy "kc_store_public_update"
@@ -148,6 +150,8 @@ using (
   or key like 'co_notes_%'
   or key like 'co_charts_%'
   or key like 'co_dashboard_%'
+  or key like 'co_dash_votes_%'
+  or key like 'co_datasets_%'
 )
 with check (
   key in (
@@ -161,6 +165,8 @@ with check (
   or key like 'co_notes_%'
   or key like 'co_charts_%'
   or key like 'co_dashboard_%'
+  or key like 'co_dash_votes_%'
+  or key like 'co_datasets_%'
 );
 
 create policy "kc_store_public_delete"
@@ -179,6 +185,8 @@ using (
   or key like 'co_notes_%'
   or key like 'co_charts_%'
   or key like 'co_dashboard_%'
+  or key like 'co_dash_votes_%'
+  or key like 'co_datasets_%'
 );
 
 do $$
@@ -276,16 +284,32 @@ Then open the preview URL and make sure the homepage renders before pushing to G
 
 ---
 
-## AI Features
+## Current Feature Notes
 
-The Q&A word cloud grouping and strategy board analysis use the **Anthropic Claude API**. In the admin panel, these features prompt the user for an API key at runtime (never stored permanently).
+The Q&A word cloud grouping now uses a no-cost in-browser heuristic grouping flow, so the button works without an API key. It is intentionally lightweight: it groups by repeated keywords / concepts and lets the host confirm before publishing.
 
-To reduce API costs:
-- Word cloud grouping only triggers on admin action (not automatic)
-- Strategy analysis is user-initiated
-- API calls use `claude-sonnet-4-20250514` with `max_tokens: 1000`
+The strategy board runs CSV/JSON analysis in the browser and can produce:
 
-Estimated cost: ~$0.01–0.05 per workshop session.
+- Data profile and missing-value checks
+- Numeric summaries with average, min/max, Q1/Q3
+- Category bar charts
+- Bivariate scatter plots
+- Multivariate grouped summary tables
+
+For future fully local AI grouping, you can add a WebGPU/WebLLM-style model runner and use a small open model such as Gemma, but that requires a separate model download UX and browser capability checks. This repo currently keeps the default path zero-cost and static-host friendly.
+
+## Sources And References
+
+This project is intentionally built from broadly available web platform pieces so other facilitators can adapt it:
+
+- React: component-based UI structure, state-driven rendering — https://react.dev/
+- Vite: fast local dev server and static production build — https://vite.dev/
+- GitHub Pages with GitHub Actions: static deployment target and workflow runner — https://docs.github.com/pages
+- Supabase: hosted Postgres, Auth, Realtime, Row Level Security — https://supabase.com/docs
+- Web Crypto API: browser-native random values and SHA-256 hashing for demo OTP internals — https://developer.mozilla.org/docs/Web/API/Web_Crypto_API
+- Service Worker API: timer notification support and static asset caching — https://developer.mozilla.org/docs/Web/API/Service_Worker_API
+
+When making your own toolbox, start by copying the app shape rather than every feature: define shared UI components, one storage adapter, one auth path, then add tools as isolated pages under `src/tools/`.
 
 ---
 

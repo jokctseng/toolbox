@@ -191,16 +191,36 @@ export function destroySession(namespace = 'default') {
 // Unique ID generator
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
-// Auto-archive Q&A activities (10 days after end)
+const cleanupActivityKeys = (prefix, id) => {
+  db.keys(prefix).forEach(key => {
+    if (key.includes(id)) db.del(key);
+  });
+};
+
+// Auto-delete workshop activity data 10 days after end to keep Supabase lean.
 export function checkAndArchive() {
-  const activities = db.get('qa_activities', []);
   const now = Date.now();
-  let changed = false;
-  activities.forEach(a => {
-    if (!a.archived && a.endTime && (now - new Date(a.endTime).getTime()) > 10 * 24 * 60 * 60 * 1000) {
-      a.archived = true;
-      changed = true;
+  const expired = (a) => a.endTime && (now - new Date(a.endTime).getTime()) > 10 * 24 * 60 * 60 * 1000;
+
+  const qa = db.get('qa_activities', []);
+  const keepQa = [];
+  qa.forEach(a => {
+    if (expired(a)) {
+      cleanupActivityKeys('qa_', a.id);
+    } else {
+      keepQa.push(a);
     }
   });
-  if (changed) db.set('qa_activities', activities);
+  if (keepQa.length !== qa.length) db.set('qa_activities', keepQa);
+
+  const co = db.get('co_activities', []);
+  const keepCo = [];
+  co.forEach(a => {
+    if (expired(a)) {
+      ['co_notes_', 'co_charts_', 'co_dashboard_', 'co_dash_votes_', 'co_datasets_'].forEach(prefix => db.del(`${prefix}${a.id}`));
+    } else {
+      keepCo.push(a);
+    }
+  });
+  if (keepCo.length !== co.length) db.set('co_activities', keepCo);
 }

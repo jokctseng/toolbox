@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   db, uid, broadcast,
-  generateOTP, verifyOTP, checkSession, createSession, destroySession,
+  generateOTP, verifyOTP, checkSession, createSession, destroySession, checkAndArchive,
 } from '../store.js';
 import { mdToHtml, badgeColor, clone, exportCSV } from '../utils.js';
 import {
@@ -115,10 +115,10 @@ function OTPLogin({ onLogin }) {
 // ─── Activity List ─────────────────────────────────────────────────────────────
 function ActivityList({ onEdit, onLogout }) {
   const { lang } = useLang();
-  const [activities, setActivities] = useState(() => loadActivities().filter(a => !a.archived));
+  const [activities, setActivities] = useState(() => { checkAndArchive(); return loadActivities().filter(a => !a.archived); });
   const [delConfirm, setDelConfirm] = useState(null);
 
-  const refresh = () => setActivities(loadActivities().filter(a => !a.archived));
+  const refresh = () => { checkAndArchive(); setActivities(loadActivities().filter(a => !a.archived)); };
 
   const createNew = () => {
     if (activities.length >= MAX_ACTIVITIES) return;
@@ -158,7 +158,7 @@ function ActivityList({ onEdit, onLogout }) {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
-              <Btn size="sm" variant="ghost" onClick={() => window.open(`#/cocreate?code=${act.code}`, '_blank')}>
+              <Btn size="sm" variant="ghost" onClick={() => window.open(`${window.location.origin}${window.location.pathname}#/cocreate?code=${act.code}`, '_blank')}>
                 {lang === 'zh' ? '前台' : 'Front'}↗
               </Btn>
               <Btn size="sm" onClick={() => onEdit(act.id)}>{lang === 'zh' ? '編輯' : 'Edit'}</Btn>
@@ -273,21 +273,32 @@ function DashboardAdmin({ act, updateAct, lang }) {
   const [editGroup, setEditGroup] = useState('');
   const questions = act.dashboardQuestions || [];
   const userQs = db.get(`co_dashboard_${act.id}`, []).filter(q => q.userSubmitted);
+  const syncQuestions = (next) => {
+    updateAct({ dashboardQuestions: next });
+    db.set(`co_dashboard_${act.id}`, next);
+    broadcast('co_update', {});
+  };
 
   const parseBulk = () => {
     const lines = bulk.trim().split('\n').filter(Boolean);
+    const existing = [...questions];
     const parsed = lines.map(line => {
       const parts = line.split('-');
-      if (parts.length >= 3) return { id: uid(), group: parts[0].trim(), num: parts[1].trim(), text: parts.slice(2).join('-').trim(), ts: Date.now() };
-      return { id: uid(), group: '', num: '', text: line.trim(), ts: Date.now() };
+      const group = parts.length >= 3 ? parts[0].trim() : '';
+      const num = parts.length >= 3 ? parts[1].trim() : '';
+      const text = parts.length >= 3 ? parts.slice(2).join('-').trim() : line.trim();
+      const groupCount = existing.filter(q => (q.group || '') === group).length + 1;
+      const item = { id: uid(), group, num: num || String(groupCount).padStart(2, '0'), text, ts: Date.now() };
+      existing.push(item);
+      return item;
     });
-    updateAct({ dashboardQuestions: [...questions, ...parsed] });
+    syncQuestions([...questions, ...parsed]);
     setBulk('');
   };
 
-  const deleteQ = (id) => updateAct({ dashboardQuestions: questions.filter(q => q.id !== id) });
+  const deleteQ = (id) => syncQuestions(questions.filter(q => q.id !== id));
   const saveEdit = () => {
-    updateAct({ dashboardQuestions: questions.map((q, i) => i === editIdx ? { ...q, text: editText, group: editGroup } : q) });
+    syncQuestions(questions.map((q, i) => i === editIdx ? { ...q, text: editText, group: editGroup } : q));
     setEditIdx(null);
   };
 
@@ -295,7 +306,7 @@ function DashboardAdmin({ act, updateAct, lang }) {
     const list = db.get(`co_dashboard_${act.id}`, []);
     const idx = list.findIndex(i => i.id === q.id);
     if (idx >= 0) { list[idx].userSubmitted = false; db.set(`co_dashboard_${act.id}`, list); }
-    updateAct({ dashboardQuestions: [...questions, { ...q, userSubmitted: false }] });
+    syncQuestions([...questions, { ...q, userSubmitted: false }]);
   };
 
   return (
@@ -325,11 +336,10 @@ function DashboardAdmin({ act, updateAct, lang }) {
         <div key={q.id} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, padding: '8px 12px', background: 'var(--surface-2)', borderRadius: 8 }}>
           {editIdx === idx ? (
             <div style={{ flex: 1, display: 'flex', gap: 6 }}>
-              <select value={editGroup} onChange={e => setEditGroup(e.target.value)}
-                style={{ padding: '4px 8px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 5, fontSize: 12, color: 'var(--text)' }}>
-                <option value="">{lang === 'zh' ? '（無分組）' : '(No group)'}</option>
-                {(act.groups || []).map(g => <option key={g.name} value={g.name}>{g.name}</option>)}
-              </select>
+              <input value={editGroup} onChange={e => setEditGroup(e.target.value)} list="co-dashboard-groups"
+                placeholder={lang === 'zh' ? '分組' : 'Group'}
+                style={{ width: 120, padding: '4px 8px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 5, fontSize: 12, color: 'var(--text)' }} />
+              <datalist id="co-dashboard-groups">{(act.groups || []).map(g => <option key={g.name} value={g.name} />)}</datalist>
               <input value={editText} onChange={e => setEditText(e.target.value)}
                 style={{ flex: 1, padding: '4px 8px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 5, fontSize: 13, color: 'var(--text)' }} />
               <Btn size="sm" onClick={saveEdit}>✓</Btn>
@@ -387,6 +397,14 @@ function NotesAdmin({ act, lang }) {
     broadcast('co_update', {});
     refreshNotes();
   };
+  const deleteReply = (noteId, replyId) => {
+    const list = db.get(`co_notes_${act.id}`, []);
+    const note = list.find(n => n.id === noteId);
+    if (note) note.replies = (note.replies || []).filter(r => r.id !== replyId);
+    db.set(`co_notes_${act.id}`, list);
+    broadcast('co_update', {});
+    refreshNotes();
+  };
 
   const submitFeedback = () => {
     if (!feedbackText.trim()) return;
@@ -411,7 +429,16 @@ function NotesAdmin({ act, lang }) {
                   {n.hidden && <Badge color="red">{lang === 'zh' ? '已隱藏' : 'Hidden'}</Badge>}
                   <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{new Date(n.ts).toLocaleString()}</span>
                 </div>
-                <p style={{ fontSize: 14 }}>{n.text}</p>
+                <div style={{ fontSize: 14 }} dangerouslySetInnerHTML={{ __html: mdToHtml(n.text) }} />
+                {(n.replies || []).map(r => (
+                  <div key={r.id} style={{ marginTop: 8, padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 8, borderLeft: '3px solid var(--border)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700 }}>{r.nick}</span>
+                      <Btn size="sm" variant="danger" onClick={() => deleteReply(n.id, r.id)}>✕</Btn>
+                    </div>
+                    <div style={{ fontSize: 13, marginTop: 3 }} dangerouslySetInnerHTML={{ __html: mdToHtml(r.text) }} />
+                  </div>
+                ))}
                 {n.adminFeedback && (
                   <div style={{ marginTop: 6, padding: '6px 10px', background: 'var(--accent-light)', borderRadius: 6, fontSize: 13 }}>
                     <Badge color="teal">host</Badge> {n.adminFeedback}
@@ -458,6 +485,9 @@ function ChartsAdmin({ act, lang }) {
   const [commentText, setCommentText] = useState('');
   const [manualOpen, setManualOpen] = useState(false);
   const [manual, setManual] = useState({ title: '', desc: '', content: '' });
+  const [datasetOpen, setDatasetOpen] = useState(false);
+  const [dataset, setDataset] = useState({ title: '', desc: '', content: '' });
+  const [datasets, setDatasets] = useState(() => db.get(`co_datasets_${act.id}`, []));
 
   const refreshCharts = () => setLocalCharts(db.get(`co_charts_${act.id}`, []));
 
@@ -504,13 +534,46 @@ function ChartsAdmin({ act, lang }) {
     broadcast('co_update', {});
     refreshCharts();
   };
+  const addDataset = () => {
+    if (!dataset.title.trim() || !dataset.content.trim()) return;
+    const list = db.get(`co_datasets_${act.id}`, []);
+    list.push({ id: uid(), ...dataset, title: dataset.title.trim(), desc: dataset.desc.trim(), content: dataset.content.trim(), ts: Date.now() });
+    db.set(`co_datasets_${act.id}`, list);
+    broadcast('co_update', {});
+    setDatasets(list);
+    setDataset({ title: '', desc: '', content: '' });
+    setDatasetOpen(false);
+  };
+  const deleteDataset = (id) => {
+    const list = db.get(`co_datasets_${act.id}`, []).filter(d => d.id !== id);
+    db.set(`co_datasets_${act.id}`, list);
+    broadcast('co_update', {});
+    setDatasets(list);
+  };
 
   return (
     <div>
       <SectionHead
         title={lang === 'zh' ? '戰略板管理' : 'Strategy Board Management'}
-        actions={<Btn size="sm" onClick={() => setManualOpen(true)}>+ {lang === 'zh' ? '新增公開成果' : 'Add Result'}</Btn>}
+        actions={<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Btn size="sm" variant="ghost" onClick={() => setDatasetOpen(true)}>+ {lang === 'zh' ? '新增公用數據' : 'Add Dataset'}</Btn>
+          <Btn size="sm" onClick={() => setManualOpen(true)}>+ {lang === 'zh' ? '新增公開成果' : 'Add Result'}</Btn>
+        </div>}
       />
+      {datasets.length > 0 && (
+        <Card style={{ marginBottom: 12, background: 'var(--surface-2)' }}>
+          <p style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{lang === 'zh' ? '公用數據資料' : 'Public datasets'}</p>
+          {datasets.map(d => (
+            <div key={d.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '7px 0', borderTop: '1px solid var(--border)' }}>
+              <div style={{ flex: 1 }}>
+                <strong style={{ fontSize: 13 }}>{d.title}</strong>
+                {d.desc && <p style={{ fontSize: 12, color: 'var(--text-2)' }}>{d.desc}</p>}
+              </div>
+              <Btn size="sm" variant="danger" onClick={() => deleteDataset(d.id)}>✕</Btn>
+            </div>
+          ))}
+        </Card>
+      )}
       {localCharts.length === 0 ? <Empty>{lang === 'zh' ? '尚無公開圖表' : 'No published charts yet'}</Empty> : (
         localCharts.map(c => (
           <Card key={c.id} style={{ marginBottom: 12, opacity: c.hidden ? 0.5 : 1 }}>
@@ -556,6 +619,18 @@ function ChartsAdmin({ act, lang }) {
           <Inp label={lang === 'zh' ? '標題' : 'Title'} value={manual.title} onChange={v => setManual(m => ({ ...m, title: v }))} />
           <Inp label={lang === 'zh' ? '說明' : 'Description'} value={manual.desc} onChange={v => setManual(m => ({ ...m, desc: v }))} />
           <Inp multiline rows={6} label={lang === 'zh' ? '內容（支援 Markdown 或貼上 SVG/表格 HTML）' : 'Content (Markdown or SVG/table HTML)'} value={manual.content} onChange={v => setManual(m => ({ ...m, content: v }))} />
+        </div>
+      </Modal>
+      <Modal open={datasetOpen} onClose={() => setDatasetOpen(false)}
+        title={lang === 'zh' ? '新增公用數據資料' : 'Add Public Dataset'}
+        footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <Btn variant="ghost" onClick={() => setDatasetOpen(false)}>{lang === 'zh' ? '取消' : 'Cancel'}</Btn>
+          <Btn onClick={addDataset}>{lang === 'zh' ? '新增' : 'Add'}</Btn>
+        </div>}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Inp label={lang === 'zh' ? '資料標題' : 'Dataset title'} value={dataset.title} onChange={v => setDataset(d => ({ ...d, title: v }))} />
+          <Inp label={lang === 'zh' ? '說明' : 'Description'} value={dataset.desc} onChange={v => setDataset(d => ({ ...d, desc: v }))} />
+          <Inp multiline rows={8} label={lang === 'zh' ? 'CSV 或 JSON 內容' : 'CSV or JSON content'} value={dataset.content} onChange={v => setDataset(d => ({ ...d, content: v }))} />
         </div>
       </Modal>
     </div>

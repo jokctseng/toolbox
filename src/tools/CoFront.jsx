@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, uid, onBroadcast, broadcast } from '../store.js';
-import { mdToHtml, badgeColor, clone } from '../utils.js';
+import { mdToHtml, badgeColor, clone, exportCSV } from '../utils.js';
 import { Btn, Card, Badge, Tabs, Modal, Spinner, Empty, Progress } from '../components/UI.jsx';
 import { useLang } from '../App.jsx';
 
@@ -28,7 +28,7 @@ function useCoActivity(actId) {
 
 // ─── Join / Cover ─────────────────────────────────────────────────────────────
 function JoinScreen({ onJoin, lang }) {
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState(() => new URLSearchParams((window.location.hash.split('?')[1] || '')).get('code') || '');
   const [err, setErr] = useState('');
 
   const join = () => {
@@ -62,6 +62,30 @@ function JoinScreen({ onJoin, lang }) {
           {lang === 'zh' ? '進入 →' : 'Enter →'}
         </Btn>
       </Card>
+    </div>
+  );
+}
+
+function MarkdownToolbar({ onInsert, lang }) {
+  const tools = [
+    ['**', 'B', '**粗體**'],
+    ['- ', '•', '- 列點'],
+    ['- [ ] ', '☐', '- [ ] 待辦'],
+    ['==', 'HL', '==高亮=='],
+    ['++', 'U', '++底線++'],
+    ['> ', '“', '> 引言'],
+  ];
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+      {tools.map(([token, label, sample]) => (
+        <button key={label} type="button" title={sample} onClick={() => onInsert(token)}
+          style={{ minWidth: 30, height: 28, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface-2)', color: 'var(--text)', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>
+          {label}
+        </button>
+      ))}
+      <span style={{ fontSize: 12, color: 'var(--text-3)', alignSelf: 'center' }}>
+        {lang === 'zh' ? '支援 Markdown' : 'Markdown'}
+      </span>
     </div>
   );
 }
@@ -135,6 +159,12 @@ function NotesTab({ act, userId, nick, lang }) {
     saveNote({ id: uid(), userId, nick, text: text.trim(), likes: 0, group: noteGroup, ts: Date.now(), replies: [], hidden: false });
     setText('');
   };
+  const insertMarkdown = (token) => setText(v => {
+    if (token === '**') return `${v}**${lang === 'zh' ? '粗體' : 'bold'}**`;
+    if (token === '==') return `${v}==${lang === 'zh' ? '高亮' : 'highlight'}==`;
+    if (token === '++') return `${v}++${lang === 'zh' ? '底線' : 'underline'}++`;
+    return `${v}${v.endsWith('\n') || !v ? '' : '\n'}${token}`;
+  });
 
   const submitReply = (parentId) => {
     if (!replyText.trim()) return;
@@ -194,6 +224,7 @@ function NotesTab({ act, userId, nick, lang }) {
       )}
 
       <Card style={{ marginBottom: 16 }}>
+        <MarkdownToolbar onInsert={insertMarkdown} lang={lang} />
         <textarea value={text} onChange={e => setText(e.target.value)} rows={3}
           placeholder={lang === 'zh' ? '輸入留言…' : 'Write a note…'}
           style={{ width: '100%', padding: '8px 12px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, color: 'var(--text)', resize: 'none' }} />
@@ -219,7 +250,7 @@ function NotesTab({ act, userId, nick, lang }) {
                 {n.group && <Badge color={badgeColor(n.group)}>{n.group}</Badge>}
                 <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{new Date(n.ts).toLocaleTimeString()}</span>
               </div>
-              <p style={{ fontSize: 14, lineHeight: 1.6 }}>{n.text}</p>
+              <div style={{ fontSize: 14, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: mdToHtml(n.text) }} />
               {n.adminFeedback && (
                 <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--accent-light)', borderRadius: 6 }}>
                   <Badge color="teal">host</Badge>
@@ -232,7 +263,7 @@ function NotesTab({ act, userId, nick, lang }) {
                 <div key={r.id} style={{ marginTop: 8, paddingLeft: 14, borderLeft: '2px solid var(--border)' }}>
                   <span style={{ fontSize: 12, fontWeight: 600 }}>{r.nick}</span>
                   <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 6 }}>{new Date(r.ts).toLocaleTimeString()}</span>
-                  <p style={{ fontSize: 13, lineHeight: 1.5, marginTop: 2 }}>{r.text}</p>
+                  <div style={{ fontSize: 13, lineHeight: 1.5, marginTop: 2 }} dangerouslySetInnerHTML={{ __html: mdToHtml(r.text) }} />
                 </div>
               ))}
 
@@ -352,6 +383,7 @@ function StrategyTab({ act, userId, nick, lang }) {
   const [publishing, setPublishing] = useState(null);
 
   const charts = (db.get(`co_charts_${act.id}`, [])).filter(c => !c.hidden);
+  const datasets = db.get(`co_datasets_${act.id}`, []);
 
   const handleFile = async (f) => {
     if (!f) return;
@@ -398,6 +430,26 @@ function StrategyTab({ act, userId, nick, lang }) {
           desc: lang === 'zh' ? `依 ${cats[0]} 比較 ${nums[0]} 的平均值。` : `Compare average ${nums[0]} by ${cats[0]}.`,
           category: cats[0],
           numeric: nums[0],
+        });
+      }
+      if (nums.length >= 2) {
+        next.push({
+          id: 'scatter',
+          type: 'scatter',
+          title: lang === 'zh' ? '雙變項關係圖' : 'Bivariate Scatter Plot',
+          desc: lang === 'zh' ? `比較 ${nums[0]} 與 ${nums[1]} 的關係並生成散點圖。` : `Compare ${nums[0]} and ${nums[1]} with a scatter plot.`,
+          x: nums[0],
+          y: nums[1],
+        });
+      }
+      if (cats.length && nums.length >= 2) {
+        next.push({
+          id: 'multi',
+          type: 'multi',
+          title: lang === 'zh' ? '多變項分組摘要' : 'Multivariate Group Summary',
+          desc: lang === 'zh' ? `依 ${cats[0]} 同時比較 ${nums.slice(0, 3).join('、')}。` : `Compare ${nums.slice(0, 3).join(', ')} by ${cats[0]}.`,
+          category: cats[0],
+          numeric: nums.slice(0, 3),
         });
       }
       setSuggestions(next.length ? next : [{
@@ -447,6 +499,32 @@ function StrategyTab({ act, userId, nick, lang }) {
           value: Number((values.reduce((a, b) => a + b, 0) / values.length).toFixed(2)),
         })).sort((a, b) => b.value - a.value).slice(0, 12);
         content = makeBarSvg(items, suggestion.title);
+      } else if (suggestion.type === 'scatter') {
+        const pts = data.rows.map(row => ({ x: Number(row[suggestion.x]), y: Number(row[suggestion.y]) }))
+          .filter(p => !Number.isNaN(p.x) && !Number.isNaN(p.y));
+        const maxX = Math.max(...pts.map(p => p.x), 1), maxY = Math.max(...pts.map(p => p.y), 1);
+        const circles = pts.slice(0, 300).map(p => {
+          const x = 52 + (p.x / maxX) * 600;
+          const y = 330 - (p.y / maxY) * 280;
+          return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="#0d9488" opacity=".72"></circle>`;
+        }).join('');
+        content = `<svg viewBox="0 0 720 380" style="width:100%;max-width:720px;background:var(--surface-2);border-radius:12px;padding:10px"><text x="24" y="30" font-size="18" font-weight="700" fill="currentColor">${escapeXml(suggestion.title)}</text><line x1="52" y1="330" x2="660" y2="330" stroke="currentColor" opacity=".35"/><line x1="52" y1="50" x2="52" y2="330" stroke="currentColor" opacity=".35"/>${circles}<text x="300" y="365" font-size="12" fill="currentColor">${escapeXml(suggestion.x)}</text><text x="8" y="190" font-size="12" fill="currentColor">${escapeXml(suggestion.y)}</text></svg>`;
+      } else if (suggestion.type === 'multi') {
+        const groups = {};
+        data.rows.forEach(row => {
+          const key = row[suggestion.category] || '(blank)';
+          groups[key] = groups[key] || {};
+          suggestion.numeric.forEach(col => {
+            const value = Number(row[col]);
+            if (!Number.isNaN(value)) groups[key][col] = [...(groups[key][col] || []), value];
+          });
+        });
+        const rows = Object.entries(groups).slice(0, 20).map(([g, cols]) => `<tr><td>${escapeXml(g)}</td>${suggestion.numeric.map(col => {
+          const vals = cols[col] || [];
+          const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+          return `<td>${avg.toFixed(2)}</td>`;
+        }).join('')}</tr>`).join('');
+        content = `<table class="data-table"><thead><tr><th>${escapeXml(suggestion.category)}</th>${suggestion.numeric.map(c => `<th>${escapeXml(c)} avg</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
       } else {
         content = `<div class="markdown-body"><h3>${escapeXml(file.name)}</h3><p>${escapeXml(text.slice(0, 1200))}</p></div>`;
       }
@@ -473,8 +551,24 @@ function StrategyTab({ act, userId, nick, lang }) {
       <Card style={{ marginBottom: 16 }}>
         <h4 style={{ fontSize: 15, marginBottom: 10 }}>📤 {lang === 'zh' ? '上傳資料' : 'Upload Data'}</h4>
         <p style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 10 }}>
-          {lang === 'zh' ? '支援 JSON, CSV, PDF, ODT, XLS, XLSX' : 'Supports JSON, CSV, PDF, ODT, XLS, XLSX'}
+          {lang === 'zh' ? '上傳 CSV/JSON 後，系統會依欄位型態建議統計摘要、長條圖、雙變項散點圖或多變項表格。PDF/ODT/XLSX 目前會先作文字整理；建議轉成 CSV 以取得完整圖表分析。' : 'Upload CSV/JSON to get summaries, bar charts, scatter plots and multivariate tables. PDF/ODT/XLSX are summarized as text for now; convert to CSV for charts.'}
         </p>
+        {datasets.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+            <p style={{ fontSize: 13, fontWeight: 700 }}>{lang === 'zh' ? '公用數據資料' : 'Public datasets'}</p>
+            {datasets.filter(d => !d.hidden).map(d => (
+              <div key={d.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: 10, background: 'var(--surface-2)', borderRadius: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <strong style={{ fontSize: 13 }}>{d.title}</strong>
+                  {d.desc && <p style={{ fontSize: 12, color: 'var(--text-2)' }}>{d.desc}</p>}
+                </div>
+                <Btn size="sm" variant="ghost" onClick={() => handleFile(new File([d.content || ''], `${d.title || 'dataset'}.csv`, { type: 'text/csv' }))}>
+                  {lang === 'zh' ? '使用' : 'Use'}
+                </Btn>
+              </div>
+            ))}
+          </div>
+        )}
         <input type="file" accept=".json,.csv,.pdf,.odt,.xls,.xlsx"
           onChange={e => handleFile(e.target.files[0])}
           style={{ display: 'block', marginBottom: 10 }} />
@@ -586,6 +680,7 @@ const VOTE_COLORS = { resolved: '#16a34a', partial: '#d97706', unresolved: '#dc2
 
 function DashboardTab({ act, userId, lang }) {
   const [filterGroup, setFilterGroup] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('all');
   const [newQ, setNewQ] = useState('');
   const [newQGroup, setNewQGroup] = useState('');
 
@@ -620,7 +715,9 @@ function DashboardTab({ act, userId, lang }) {
       ? { group: parts[0], num: parts[1], text: parts.slice(2).join('-').trim() }
       : { group: newQGroup, num: '', text: newQ.trim() };
     const list = db.get(`co_dashboard_${act.id}`, act.dashboardQuestions || []);
-    list.push({ id: uid(), text: parsed.text, num: parsed.num, group: parsed.group, ts: Date.now(), userSubmitted: true });
+    const groupItems = list.filter(q => (q.group || '') === (parsed.group || ''));
+    const nextNum = parsed.num || String(groupItems.length + 1).padStart(2, '0');
+    list.push({ id: uid(), text: parsed.text, num: nextNum, group: parsed.group, ts: Date.now(), userSubmitted: true });
     db.set(`co_dashboard_${act.id}`, list);
     broadcast('co_update', {});
     setLocalQs(db.get(`co_dashboard_${act.id}`, []));
@@ -638,9 +735,20 @@ function DashboardTab({ act, userId, lang }) {
       total: qVotes.length,
     };
   };
+  const statusOf = (qId) => {
+    const t = tally(qId);
+    if (t.resolved >= t.partial && t.resolved >= t.unresolved) return 'resolved';
+    if (t.partial >= t.resolved && t.partial >= t.unresolved) return 'partial';
+    return 'unresolved';
+  };
+  const stats = localQs.reduce((acc, q) => {
+    acc[statusOf(q.id)] += 1;
+    return acc;
+  }, { resolved: 0, partial: 0, unresolved: 0 });
 
   const sorted = [...localQs]
     .filter(q => filterGroup === 'all' || q.group === filterGroup)
+    .filter(q => filterStatus === 'all' || statusOf(q.id) === filterStatus)
     .sort((a, b) => {
       const ta = tally(a.id), tb = tally(b.id);
       if (tb.resolved !== ta.resolved) return tb.resolved - ta.resolved;
@@ -653,6 +761,23 @@ function DashboardTab({ act, userId, lang }) {
 
   return (
     <div>
+      <Card style={{ marginBottom: 12, padding: '12px 14px' }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          {VOTE_OPTIONS.map(opt => (
+            <Badge key={opt} color={opt === 'resolved' ? 'green' : opt === 'partial' ? 'amber' : 'red'}>
+              {VOTE_LABELS[lang][opt]}: {stats[opt]}
+            </Badge>
+          ))}
+          <Btn size="sm" variant="ghost" onClick={() => {
+            const rows = [[lang === 'zh' ? '分組' : 'Group', lang === 'zh' ? '編號' : 'No.', lang === 'zh' ? '問題' : 'Question', 'Resolved', 'Partial', 'Unresolved', lang === 'zh' ? '狀態' : 'Status']];
+            localQs.forEach(q => {
+              const t = tally(q.id);
+              rows.push([q.group || '', q.num || '', q.text, t.resolved, t.partial, t.unresolved, VOTE_LABELS[lang][statusOf(q.id)]]);
+            });
+            exportCSV(rows, `${new Date().toISOString().slice(0, 10)}_Dashboard_Report`);
+          }}>{lang === 'zh' ? '匯出結果' : 'Export'}</Btn>
+        </div>
+      </Card>
       {/* Group filter */}
       {groups.length > 0 && (
         <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 8, marginBottom: 14 }}>
@@ -667,6 +792,17 @@ function DashboardTab({ act, userId, lang }) {
           ))}
         </div>
       )}
+      <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 8, marginBottom: 14 }}>
+        {[{ key: 'all', label: lang === 'zh' ? '全部狀態' : 'All status' }, ...VOTE_OPTIONS.map(opt => ({ key: opt, label: VOTE_LABELS[lang][opt] }))].map(t => (
+          <button key={t.key} onClick={() => setFilterStatus(t.key)}
+            style={{
+              padding: '5px 12px', borderRadius: 20, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
+              fontSize: 13, fontWeight: filterStatus === t.key ? 700 : 400,
+              background: filterStatus === t.key ? 'var(--accent)' : 'var(--surface-2)',
+              color: filterStatus === t.key ? '#fff' : 'var(--text-2)',
+            }}>{t.label}</button>
+        ))}
+      </div>
 
       {/* User submit new question */}
       {act.allowUserQuestions && (
@@ -701,7 +837,7 @@ function DashboardTab({ act, userId, lang }) {
             <div style={{ display: 'flex', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap', marginBottom: 10 }}>
               <div style={{ flex: 1, minWidth: 200 }}>
                 {q.group && <Badge color={badgeColor(q.group)} style={{ marginBottom: 6 }}>{q.group}</Badge>}
-                <p style={{ fontSize: 14, lineHeight: 1.5 }}>{q.text}</p>
+                <p style={{ fontSize: 14, lineHeight: 1.5 }}>{q.num ? `${q.num}. ` : ''}{q.text}</p>
               </div>
               {/* Vote buttons */}
               <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', flexWrap: 'wrap' }}>

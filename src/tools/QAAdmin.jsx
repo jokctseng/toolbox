@@ -394,6 +394,13 @@ function ChallengeEditor({ q, onChange, lang }) {
     qs[qi].options = qs[qi].options.filter((_, i) => i !== oi);
     onChange({ ...q, questions: qs });
   };
+  const moveQ = (idx, dir) => {
+    const to = idx + dir;
+    if (to < 0 || to >= q.questions.length) return;
+    const qs = clone(q.questions);
+    [qs[idx], qs[to]] = [qs[to], qs[idx]];
+    onChange({ ...q, questions: qs });
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -408,6 +415,8 @@ function ChallengeEditor({ q, onChange, lang }) {
             <input value={cq.text} onChange={e => updateQ(qi, 'text', e.target.value)}
               placeholder={lang === 'zh' ? '題目' : 'Question text'}
               style={{ flex: 1, padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--text)' }} />
+            <button onClick={() => moveQ(qi, -1)} disabled={qi === 0} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, opacity: qi === 0 ? .35 : 1 }}>↑</button>
+            <button onClick={() => moveQ(qi, 1)} disabled={qi === q.questions.length - 1} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, opacity: qi === q.questions.length - 1 ? .35 : 1 }}>↓</button>
             {q.questions.length > 1 && (
               <button onClick={() => removeQ(qi)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 14 }}>✕</button>
             )}
@@ -415,9 +424,14 @@ function ChallengeEditor({ q, onChange, lang }) {
           {cq.options.map((opt, oi) => (
             <div key={oi} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
               {q.hasAnswer ? (
-                <input type="radio" name={`ans_${cq.id}`} checked={cq.answer === oi}
-                  onChange={() => updateQ(qi, 'answer', oi)}
-                  title={lang === 'zh' ? '正確答案' : 'Correct answer'} />
+                <>
+                  <input type="radio" name={`ans_${cq.id}`} checked={cq.answer === oi}
+                    onChange={() => updateQ(qi, 'answer', oi)}
+                    title={lang === 'zh' ? '正確答案' : 'Correct answer'} />
+                  <input type="number" value={opt.score ?? 1} onChange={e => updateOpt(qi, oi, 'score', Number(e.target.value))}
+                    title={lang === 'zh' ? '此選項為正解時的配分' : 'Score if correct'}
+                    style={{ width: 56, padding: '4px 6px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, color: 'var(--text)' }} />
+                </>
               ) : (
                 <input type="number" value={opt.score} onChange={e => updateOpt(qi, oi, 'score', Number(e.target.value))}
                   style={{ width: 50, padding: '4px 6px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, color: 'var(--text)' }} />
@@ -553,41 +567,41 @@ function ActivityEditor({ actId, onBack }) {
     updateAct({ questions: act.questions.map(q => q.id === id ? { ...q, open: !q.open } : q) });
   };
 
+  const moveQuestion = (idx, dir) => {
+    const to = idx + dir;
+    if (to < 0 || to >= (act.questions || []).length) return;
+    const questions = clone(act.questions || []);
+    [questions[idx], questions[to]] = [questions[to], questions[idx]];
+    updateAct({ questions });
+  };
+
   // AI grouping
   const runAIGroup = async (qId) => {
     const q = act.questions.find(q => q.id === qId);
     if (!q) return;
-    const entries = db.get(`qa_wc_${act.id}_${qId}`, []);
-    if (!entries.length) return;
-    const words = entries.map(e => e.text).join('\n');
+    const entries = (act.responses || []).filter(r => r.qId === qId).map(r => String(r.value || '').trim()).filter(Boolean);
+    if (!entries.length) {
+      setAiError(lang === 'zh' ? '目前沒有可分組的文字雲回覆' : 'No word-cloud responses to group yet');
+      return;
+    }
     setAiLoading(qId);
     setAiError('');
-    try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1000,
-          messages: [{
-            role: 'user',
-            content: `You are a workshop facilitator. Group these responses into 3-6 conceptual categories. Respond ONLY with JSON like:
-{"groups":[{"name":"Group Name","items":["item1","item2"]}]}
-
-Responses to group:
-${words}`,
-          }],
-        }),
-      });
-      const data = await res.json();
-      const text = data.content?.find(c => c.type === 'text')?.text || '';
-      const clean = text.replace(/```json|```/g, '').trim();
-      const parsed = JSON.parse(clean);
-      const updated = { ...q, groupResult: parsed.groups, aiGroupDone: false };
-      updateQuestion(updated);
-    } catch (e) {
-      setAiError(lang === 'zh' ? 'AI 分組失敗，請確認 API 可用' : 'AI grouping failed');
-    }
+    const tokenOf = (text) => {
+      const cleaned = text.toLowerCase().replace(/[^\p{Script=Han}\p{Letter}\p{Number}\s]/gu, ' ').trim();
+      const words = cleaned.split(/\s+/).filter(w => w.length > 1);
+      if (words.length) return words.sort((a, b) => b.length - a.length)[0];
+      return cleaned.slice(0, 2) || (lang === 'zh' ? '其他' : 'Other');
+    };
+    const grouped = new Map();
+    entries.forEach(item => {
+      const key = tokenOf(item);
+      grouped.set(key, [...(grouped.get(key) || []), item]);
+    });
+    const groups = [...grouped.entries()]
+      .sort((a, b) => b[1].length - a[1].length)
+      .slice(0, 8)
+      .map(([name, items]) => ({ name, items }));
+    updateQuestion({ ...q, groupResult: groups, aiGroupDone: false });
     setAiLoading(null);
   };
 
@@ -598,69 +612,60 @@ ${words}`,
 
   // Export results
   const handleExport = (q) => {
-    const rows = [];
-    const actId = act.id;
+    const rows = [[act.name], [q.title]];
+    const percentile = (arr, p) => arr.length ? arr[Math.floor((arr.length - 1) * p)] : 0;
+    const responses = (act.responses || []).filter(r => r.qId === q.id);
     if (q.type === 'poll') {
-      const votes = db.get(`qa_votes_${actId}_${q.id}`, {});
-      // tally
       const tally = {};
       const combos = {};
-      Object.values(votes).forEach(v => {
-        const sel = Array.isArray(v.selections) ? v.selections : [v.selections];
+      responses.forEach(v => {
+        const sel = Array.isArray(v.value) ? v.value : [v.value];
         sel.forEach(s => { tally[s] = (tally[s] || 0) + 1; });
-        const key = sel.sort().join('');
+        const key = [...sel].sort().join(' + ');
         combos[key] = (combos[key] || 0) + 1;
       });
-      rows.push([q.title]);
       rows.push([lang === 'zh' ? '選項' : 'Option', lang === 'zh' ? '票數' : 'Count']);
-      q.options.forEach((opt, i) => rows.push([opt, tally[i] || 0]));
+      q.options.forEach((opt) => rows.push([opt, tally[opt] || 0]));
       if (q.multiSelect) {
         rows.push([]);
         rows.push([lang === 'zh' ? '組合' : 'Combination', lang === 'zh' ? '票數' : 'Count']);
         Object.entries(combos).forEach(([k, v]) => rows.push([k, v]));
       }
     } else if (q.type === 'wordcloud') {
-      const entries = db.get(`qa_wc_${actId}_${q.id}`, []);
+      const entries = responses.map(r => r.value);
       if (q.aiGroup && q.aiGroupDone && q.groupResult) {
-        rows.push([q.title]);
         rows.push([lang === 'zh' ? '分組' : 'Group', lang === 'zh' ? '關鍵詞' : 'Keywords',
           ...(q.groupVote ? [lang === 'zh' ? '票數' : 'Votes'] : [])]);
-        const groupVotes = db.get(`qa_gv_${actId}_${q.id}`, {});
         q.groupResult.forEach(g => {
-          const total = Object.values(groupVotes).reduce((s, v) => s + (v[g.name] || 0), 0);
+          const total = (act.groupVotes || []).filter(v => v.qId === q.id && q.groupResult[v.gi]?.name === g.name).length;
           rows.push([g.name, g.items.join(', '), ...(q.groupVote ? [total] : [])]);
         });
       } else {
-        const freq = wordFrequency(entries.map(e => e.text));
-        rows.push([q.title]);
+        const freq = wordFrequency(entries);
         rows.push([lang === 'zh' ? '詞' : 'Word', lang === 'zh' ? '頻率' : 'Freq']);
         freq.forEach(({ word, count }) => rows.push([word, count]));
       }
     } else if (q.type === 'idea') {
-      const ideas = db.get(`qa_ideas_${actId}_${q.id}`, []);
-      rows.push([q.title]);
       rows.push([lang === 'zh' ? '點子' : 'Idea', lang === 'zh' ? '愛心' : 'Hearts', lang === 'zh' ? '回饋' : 'Feedback', lang === 'zh' ? '公開' : 'Public']);
-      ideas.filter(i => i.public).forEach(i => rows.push([i.text, i.hearts || 0, i.feedback || '', '✓']));
+      responses.forEach(i => rows.push([i.value, i.hearts || 0, i.feedback || '', i.public ? '✓' : 'private']));
     } else if (q.type === 'challenge') {
-      const scores = db.get(`qa_ch_${actId}_${q.id}`, {});
-      rows.push([q.title]);
-      // per-question stats
+      const scoreOf = (sq, ans) => q.hasAnswer
+        ? (Number(ans) === Number(sq.answer) ? Number(sq.options?.[sq.answer]?.score ?? 1) : 0)
+        : Number(sq.options?.[Number(ans)]?.score || 0);
       q.questions.forEach((sq, si) => {
-        const qScores = Object.values(scores).map(s => s.perQ?.[si] || 0);
+        const qScores = responses.map(r => scoreOf(sq, r.value?.[si])).sort((a, b) => a - b);
         if (qScores.length) {
           const avg = qScores.reduce((a, b) => a + b, 0) / qScores.length;
-          const sorted = [...qScores].sort((a, b) => a - b);
-          const q1 = sorted[Math.floor(sorted.length * 0.25)];
-          const q3 = sorted[Math.floor(sorted.length * 0.75)];
-          rows.push([`Q${si + 1}: ${sq.text}`, `Avg: ${avg.toFixed(1)}`, `Q1: ${q1}`, `Q3: ${q3}`]);
+          rows.push([`Q${si + 1}: ${sq.text}`, `Avg: ${avg.toFixed(1)}`, `Q1: ${percentile(qScores, .25)}`, `Q3: ${percentile(qScores, .75)}`]);
         }
       });
-      const totals = Object.values(scores).map(s => s.total || 0).sort((a, b) => b - a);
+      const totals = responses.map(r => Number(r.score || 0)).sort((a, b) => a - b);
       if (totals.length) {
         const avg = totals.reduce((a, b) => a + b, 0) / totals.length;
-        const q1 = totals[Math.floor(totals.length * 0.75)];
-        const q3 = totals[Math.floor(totals.length * 0.25)];
-        rows.push(['Total', `Avg: ${avg.toFixed(1)}`, `Q1: ${q1}`, `Q3: ${q3}`]);
+        rows.push(['Total', `Avg: ${avg.toFixed(1)}`, `Q1: ${percentile(totals, .25)}`, `Q3: ${percentile(totals, .75)}`]);
+        rows.push([lang === 'zh' ? '排名' : 'Ranking', lang === 'zh' ? '作答ID' : 'Response ID', lang === 'zh' ? '總分' : 'Total']);
+        [...responses].sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+          .forEach((r, i) => rows.push([i + 1, r.id, r.score || 0]));
       }
     }
 
@@ -767,7 +772,7 @@ ${words}`,
           {(act.questions || []).length === 0 && (
             <Empty>{lang === 'zh' ? '尚無互動題目，最多可新增 5 個' : 'No questions yet. Add up to 5.'}</Empty>
           )}
-          {(act.questions || []).map((q) => {
+          {(act.questions || []).map((q, qIdx) => {
             const typeInfo = Q_TYPES.find(t => t.type === q.type);
             return (
               <Card key={q.id} style={{ marginBottom: 12 }}>
@@ -780,6 +785,8 @@ ${words}`,
                     <Badge color={q.open ? 'green' : 'gray'}>
                       {q.open ? (lang === 'zh' ? '開放中' : 'Open') : (lang === 'zh' ? '未開放' : 'Closed')}
                     </Badge>
+                    <button onClick={() => moveQuestion(qIdx, -1)} disabled={qIdx === 0} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, opacity: qIdx === 0 ? .35 : 1 }}>↑</button>
+                    <button onClick={() => moveQuestion(qIdx, 1)} disabled={qIdx === (act.questions || []).length - 1} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, opacity: qIdx === (act.questions || []).length - 1 ? .35 : 1 }}>↓</button>
                     <Btn size="sm" variant={q.open ? 'danger' : 'primary'}
                       onClick={() => { toggleOpen(q.id); broadcast('qa_update', {}); }}>
                       {q.open ? (lang === 'zh' ? '關閉' : 'Close') : (lang === 'zh' ? '開始' : 'Open')}
@@ -834,6 +841,26 @@ ${words}`,
                           checked={q.voteOpen} onChange={v => { updateQuestion({ ...q, voteOpen: v }); broadcast('qa_update', {}); }} />
                       </div>
                     )}
+                  </div>
+                )}
+                {q.type === 'idea' && editQ === q.id && (
+                  <div style={{ marginTop: 12, padding: 12, background: 'var(--surface-2)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                    <p style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{lang === 'zh' ? '點子與回饋管理' : 'Idea Feedback'}</p>
+                    {(act.responses || []).filter(r => r.qId === q.id).length === 0 ? (
+                      <p style={{ fontSize: 13, color: 'var(--text-3)' }}>{lang === 'zh' ? '尚無點子' : 'No ideas yet'}</p>
+                    ) : (act.responses || []).filter(r => r.qId === q.id).map(idea => (
+                      <div key={idea.id} style={{ padding: 10, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, marginBottom: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
+                          <Badge color={idea.public ? 'green' : 'amber'}>{idea.public ? (lang === 'zh' ? '公開' : 'Public') : (lang === 'zh' ? '私密' : 'Private')}</Badge>
+                          <span style={{ fontSize: 12, color: 'var(--text-3)' }}>❤️ {idea.hearts || 0}</span>
+                        </div>
+                        <p style={{ fontSize: 13, lineHeight: 1.6 }}>{idea.value}</p>
+                        <textarea value={idea.feedback || ''} onChange={e => {
+                          updateAct({ responses: (act.responses || []).map(r => r.id === idea.id ? { ...r, feedback: e.target.value } : r) });
+                        }} rows={2} placeholder={lang === 'zh' ? '管理員回饋...' : 'Host feedback...'}
+                          style={{ width: '100%', marginTop: 8, padding: '7px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--text)', fontSize: 13, resize: 'vertical' }} />
+                      </div>
+                    ))}
                   </div>
                 )}
               </Card>
