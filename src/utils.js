@@ -68,23 +68,99 @@ export const playSound = (type = 'bell') => {
   } catch(e) {}
 };
 
-// Simple markdown to HTML (subset)
+const escapeHtml = (text = '') => String(text)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;');
+
+const inlineMd = (text = '') => escapeHtml(text)
+  .replace(/==(.+?)==/g, '<mark>$1</mark>')
+  .replace(/\+\+(.+?)\+\+/g, '<u>$1</u>')
+  .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  .replace(/\*(.+?)\*/g, '<em>$1</em>')
+  .replace(/`(.+?)`/g, '<code>$1</code>')
+  .replace(/\[(.+?)\]\((https?:\/\/.+?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+// Markdown to HTML for workshop rules/resources. Supports headings, nested lists,
+// task lists, blockquotes, highlight (==text==), underline (++text++), and links.
 export const mdToHtml = (md = '') => {
   if (!md) return '';
-  return md
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code>$1</code>')
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
-    .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/\n\n/g, '</p><p>')
-    .replace(/^(?!<[hul])(.+)$/gm, '<p>$1</p>')
-    .replace(/<p><\/p>/g, '');
+  const lines = md.replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  const stack = [];
+  let paragraph = [];
+  let quote = false;
+
+  const closeParagraph = () => {
+    if (!paragraph.length) return;
+    out.push(`<p>${inlineMd(paragraph.join(' '))}</p>`);
+    paragraph = [];
+  };
+  const closeListsTo = (level = -1) => {
+    while (stack.length > level + 1) out.push(`</${stack.pop()}>`);
+  };
+  const closeQuote = () => {
+    if (quote) {
+      closeParagraph();
+      closeListsTo();
+      out.push('</blockquote>');
+      quote = false;
+    }
+  };
+
+  lines.forEach(raw => {
+    const line = raw.replace(/\s+$/, '');
+    if (!line.trim()) {
+      closeParagraph();
+      closeListsTo();
+      closeQuote();
+      return;
+    }
+
+    const quoteMatch = line.match(/^>\s?(.*)$/);
+    const contentLine = quoteMatch ? quoteMatch[1] : line;
+    if (quoteMatch && !quote) {
+      closeParagraph();
+      closeListsTo();
+      out.push('<blockquote>');
+      quote = true;
+    }
+    if (!quoteMatch) closeQuote();
+
+    const heading = contentLine.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      closeParagraph();
+      closeListsTo();
+      const level = heading[1].length;
+      out.push(`<h${level}>${inlineMd(heading[2])}</h${level}>`);
+      return;
+    }
+
+    const list = contentLine.match(/^(\s*)([-*]|\d+\.)\s+(\[[ xX]\]\s+)?(.+)$/);
+    if (list) {
+      closeParagraph();
+      const level = Math.floor(list[1].replace(/\t/g, '  ').length / 2);
+      const type = /^\d+\./.test(list[2]) ? 'ol' : 'ul';
+      while (stack.length > level && stack[stack.length - 1] !== type) out.push(`</${stack.pop()}>`);
+      while (stack.length <= level) {
+        stack.push(type);
+        out.push(`<${type}>`);
+      }
+      const task = list[3];
+      const checked = task && /\[[xX]\]/.test(task);
+      const checkbox = task ? `<input type="checkbox" disabled ${checked ? 'checked' : ''}> ` : '';
+      out.push(`<li>${checkbox}${inlineMd(list[4])}</li>`);
+      return;
+    }
+
+    closeListsTo();
+    paragraph.push(contentLine.trim());
+  });
+
+  closeParagraph();
+  closeListsTo();
+  closeQuote();
+  return `<div class="markdown-body">${out.join('\n')}</div>`;
 };
 
 // Parse CSV / newline text for queue import

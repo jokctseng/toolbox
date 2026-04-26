@@ -8,6 +8,7 @@ import {
   Btn, Card, Modal, Inp, Toggle, Badge, Tabs, Confirm, SectionHead, Empty, Spinner,
 } from '../components/UI.jsx';
 import { useLang } from '../App.jsx';
+import AdminLogin from '../components/AdminLogin.jsx';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 const MAX_ACTIVITIES = 3;
@@ -455,6 +456,8 @@ function ChartsAdmin({ act, lang }) {
   const [localCharts, setLocalCharts] = useState(charts);
   const [commentId, setCommentId] = useState(null);
   const [commentText, setCommentText] = useState('');
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manual, setManual] = useState({ title: '', desc: '', content: '' });
 
   const refreshCharts = () => setLocalCharts(db.get(`co_charts_${act.id}`, []));
 
@@ -477,9 +480,37 @@ function ChartsAdmin({ act, lang }) {
     setCommentText('');
   };
 
+  const addManualChart = () => {
+    if (!manual.title.trim() && !manual.content.trim()) return;
+    const list = db.get(`co_charts_${act.id}`, []);
+    list.push({
+      id: uid(),
+      title: manual.title.trim() || (lang === 'zh' ? '手動新增圖表' : 'Manual Chart'),
+      desc: manual.desc.trim(),
+      content: manual.content.trim(),
+      contributor: 'host',
+      ts: Date.now(),
+    });
+    db.set(`co_charts_${act.id}`, list);
+    broadcast('co_update', {});
+    setManual({ title: '', desc: '', content: '' });
+    setManualOpen(false);
+    refreshCharts();
+  };
+
+  const deleteChart = (id) => {
+    const list = db.get(`co_charts_${act.id}`, []).filter(c => c.id !== id);
+    db.set(`co_charts_${act.id}`, list);
+    broadcast('co_update', {});
+    refreshCharts();
+  };
+
   return (
     <div>
-      <SectionHead>{lang === 'zh' ? '戰略板管理' : 'Strategy Board Management'}</SectionHead>
+      <SectionHead
+        title={lang === 'zh' ? '戰略板管理' : 'Strategy Board Management'}
+        actions={<Btn size="sm" onClick={() => setManualOpen(true)}>+ {lang === 'zh' ? '新增公開成果' : 'Add Result'}</Btn>}
+      />
       {localCharts.length === 0 ? <Empty>{lang === 'zh' ? '尚無公開圖表' : 'No published charts yet'}</Empty> : (
         localCharts.map(c => (
           <Card key={c.id} style={{ marginBottom: 12, opacity: c.hidden ? 0.5 : 1 }}>
@@ -500,7 +531,7 @@ function ChartsAdmin({ act, lang }) {
                 <Btn size="sm" variant="ghost" onClick={() => updateChart(c.id, { hidden: !c.hidden })}>
                   {c.hidden ? '👁️' : '🙈'}
                 </Btn>
-                <Btn size="sm" variant="danger" onClick={() => { updateChart(c.id, { _del: true }); setLocalCharts(prev => prev.filter(x => x.id !== c.id)); }}>✕</Btn>
+                <Btn size="sm" variant="danger" onClick={() => deleteChart(c.id)}>✕</Btn>
               </div>
             </div>
           </Card>
@@ -513,6 +544,19 @@ function ChartsAdmin({ act, lang }) {
           placeholder={lang === 'zh' ? '標註說明或回饋…' : 'Annotation or feedback…'}
           style={{ width: '100%', padding: '8px 12px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 7, fontSize: 13, color: 'var(--text)', resize: 'vertical' }} />
         <Btn onClick={submitComment} style={{ marginTop: 10 }}>{lang === 'zh' ? '送出' : 'Submit'}</Btn>
+      </Modal>
+
+      <Modal open={manualOpen} onClose={() => setManualOpen(false)}
+        title={lang === 'zh' ? '新增公開成果' : 'Add Published Result'}
+        footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <Btn variant="ghost" onClick={() => setManualOpen(false)}>{lang === 'zh' ? '取消' : 'Cancel'}</Btn>
+          <Btn onClick={addManualChart}>{lang === 'zh' ? '新增' : 'Add'}</Btn>
+        </div>}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Inp label={lang === 'zh' ? '標題' : 'Title'} value={manual.title} onChange={v => setManual(m => ({ ...m, title: v }))} />
+          <Inp label={lang === 'zh' ? '說明' : 'Description'} value={manual.desc} onChange={v => setManual(m => ({ ...m, desc: v }))} />
+          <Inp multiline rows={6} label={lang === 'zh' ? '內容（支援 Markdown 或貼上 SVG/表格 HTML）' : 'Content (Markdown or SVG/table HTML)'} value={manual.content} onChange={v => setManual(m => ({ ...m, content: v }))} />
+        </div>
       </Modal>
     </div>
   );
@@ -659,8 +703,9 @@ function ActivityEditor({ actId, onBack }) {
 export default function CoAdmin() {
   const [authed, setAuthed] = useState(() => checkSession('co_admin'));
   const [editId, setEditId] = useState(null);
+  const { lang } = useLang();
 
-  if (!authed) return <OTPLogin onLogin={() => setAuthed(true)} />;
+  if (!authed) return <AdminLogin namespace="co_admin" lang={lang} title={lang === 'zh' ? '共創工作站後台' : 'Co-creation Admin'} onLogin={() => setAuthed(true)} />;
   if (editId) return <ActivityEditor actId={editId} onBack={() => setEditId(null)} />;
   return (
     <ActivityList

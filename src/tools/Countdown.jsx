@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { db, uid } from '../store.js';
 import { toSeconds, fromSeconds, formatTime, playSound, clone } from '../utils.js';
-import { Btn, Card, Modal, Toggle, TimeInput, Badge, SectionHead } from '../components/UI.jsx';
+import { Btn, Card, Toggle, TimeInput, Badge, SectionHead } from '../components/UI.jsx';
 import { useLang } from '../App.jsx';
 
 const DEFAULT_TIMER = {
@@ -40,12 +40,12 @@ function computeRemaining(timer) {
 function TimerCard({ timer, onUpdate, onDelete, lang }) {
   const t = k => ({ zh: { start:'開始', pause:'暫停', resume:'繼續', reset:'重設', running:'運行中',
     paused:'已暫停', reminding:'提醒中', finished:'時間到！', idle:'待機',
-    remind:'提前提醒', sound:'鈴聲提醒', flash:'閃爍變色', name:'計時器名稱',
+    remind:'提前提醒', sound:'鈴聲提醒', flash:'變色閃爍', name:'計時器名稱',
     duration:'計時時長', remindOffset:'提前提醒時間',
     sounds: { none:'無聲音', bell:'鈴聲', beep:'嗶嗶聲', alarm:'警報聲' },
   }, en: { start:'Start', pause:'Pause', resume:'Resume', reset:'Reset', running:'Running',
     paused:'Paused', reminding:'Reminding', finished:"Time's Up!", idle:'Idle',
-    remind:'Early Reminder', sound:'Sound Alert', flash:'Flash',
+    remind:'Early Reminder', sound:'Sound Alert', flash:'Color Flash',
     name:'Timer Name', duration:'Duration', remindOffset:'Remind Before',
     sounds: { none:'No Sound', bell:'Bell', beep:'Beep', alarm:'Alarm' },
   }}[lang]?.[k] ?? k);
@@ -67,10 +67,12 @@ function TimerCard({ timer, onUpdate, onDelete, lang }) {
       soundedRemind.current = true;
       if (timer.remindSound !== 'none') playSound(timer.remindSound);
       if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({
-          type: 'TIMER_ALERT', title: timer.name || 'KC 計時器',
-          body: `${t('reminding')} — ${formatTime(remaining)}`, id: timer.id,
-        });
+        if (Notification.permission === 'granted') {
+          navigator.serviceWorker.controller.postMessage({
+            type: 'TIMER_ALERT', title: timer.name || 'KC 計時器',
+            body: `${t('reminding')} — ${formatTime(remaining)}`, id: timer.id,
+          });
+        }
       }
     }
     if (timer.state === 'finished' && !soundedFinish.current) {
@@ -128,7 +130,7 @@ function TimerCard({ timer, onUpdate, onDelete, lang }) {
           width: `${progress*100}%`, transition: 'width 1s linear', borderRadius: 2 }} />
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         {/* Clock display */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <svg width={120} height={120} style={{ flexShrink: 0 }}>
@@ -182,15 +184,14 @@ function TimerCard({ timer, onUpdate, onDelete, lang }) {
         </div>
       </div>
 
-      {/* Edit Modal */}
-      <Modal open={editing} onClose={() => setEditing(false)} title={lang === 'zh' ? '編輯計時器' : 'Edit Timer'}
-        footer={<div style={{ display: 'flex', gap: 8 }}>
-          <Btn onClick={() => setEditing(false)} variant="ghost">{lang === 'zh' ? '取消' : 'Cancel'}</Btn>
-          <Btn onClick={saveEdit}>{lang === 'zh' ? '儲存' : 'Save'}</Btn>
-        </div>}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {editing && (
+        <div style={{
+          marginTop: 18, paddingTop: 18, borderTop: '1px solid var(--border)',
+          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
+          gap: 18, alignItems: 'start',
+        }}>
           <div>
-            <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', display: 'block', marginBottom: 5 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', display: 'block', marginBottom: 6 }}>
               {t('name')}
             </label>
             <input value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })}
@@ -200,37 +201,45 @@ function TimerCard({ timer, onUpdate, onDelete, lang }) {
           </div>
           <TimeInput label={t('duration')} value={draft.duration}
             onChange={v => setDraft({ ...draft, duration: v })} />
-
-          <Toggle checked={draft.remindEnabled}
-            onChange={v => setDraft({ ...draft, remindEnabled: v })}
-            label={t('remind')} />
-
-          {draft.remindEnabled && <>
-            <TimeInput label={t('remindOffset')} value={draft.remindOffset}
-              onChange={v => setDraft({ ...draft, remindOffset: v })} />
-            <div>
-              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', display: 'block', marginBottom: 8 }}>
-                {t('sound')}
-              </label>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {SOUNDS.map(s => (
-                  <button key={s.key} onClick={() => setDraft({ ...draft, remindSound: s.key })}
-                    style={{
-                      padding: '6px 12px', borderRadius: 6, border: '2px solid',
-                      borderColor: draft.remindSound === s.key ? 'var(--accent)' : 'var(--border)',
-                      background: draft.remindSound === s.key ? 'var(--accent-light)' : 'var(--surface-2)',
-                      color: draft.remindSound === s.key ? 'var(--accent)' : 'var(--text-2)',
-                      cursor: 'pointer', fontSize: 13, fontFamily: 'var(--font-body)',
-                    }}>{s[lang] || s.en}</button>
-                ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Toggle checked={draft.remindEnabled}
+              onChange={v => setDraft({ ...draft, remindEnabled: v })}
+              label={t('remind')} />
+            {draft.remindEnabled && (
+              <Toggle checked={draft.remindFlash}
+                onChange={v => setDraft({ ...draft, remindFlash: v })}
+                label={t('flash')} />
+            )}
+          </div>
+          {draft.remindEnabled && (
+            <>
+              <TimeInput label={t('remindOffset')} value={draft.remindOffset}
+                onChange={v => setDraft({ ...draft, remindOffset: v })} />
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', display: 'block', marginBottom: 8 }}>
+                  {t('sound')}
+                </label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {SOUNDS.map(s => (
+                    <button key={s.key} onClick={() => setDraft({ ...draft, remindSound: s.key })}
+                      style={{
+                        padding: '7px 12px', borderRadius: 6, border: '2px solid',
+                        borderColor: draft.remindSound === s.key ? 'var(--accent)' : 'var(--border)',
+                        background: draft.remindSound === s.key ? 'var(--accent-light)' : 'var(--surface-2)',
+                        color: draft.remindSound === s.key ? 'var(--accent)' : 'var(--text-2)',
+                        cursor: 'pointer', fontSize: 13, fontFamily: 'var(--font-body)',
+                      }}>{s[lang] || s.en}</button>
+                  ))}
+                </div>
               </div>
-            </div>
-            <Toggle checked={draft.remindFlash}
-              onChange={v => setDraft({ ...draft, remindFlash: v })}
-              label={t('flash')} />
-          </>}
+            </>
+          )}
+          <div style={{ display: 'flex', gap: 8, alignSelf: 'end', justifyContent: 'flex-end', gridColumn: '1 / -1' }}>
+            <Btn onClick={() => setEditing(false)} variant="ghost">{lang === 'zh' ? '取消' : 'Cancel'}</Btn>
+            <Btn onClick={saveEdit}>{lang === 'zh' ? '儲存設定' : 'Save Settings'}</Btn>
+          </div>
         </div>
-      </Modal>
+      )}
     </Card>
   );
 }
@@ -291,7 +300,11 @@ export default function Countdown() {
   };
 
   const requestNotif = async () => {
-    if ('Notification' in window) await Notification.requestPermission();
+    if (!('Notification' in window)) return;
+    const permission = await Notification.requestPermission();
+    if (permission === 'granted' && 'serviceWorker' in navigator) {
+      await navigator.serviceWorker.ready.catch(() => null);
+    }
   };
 
   return (

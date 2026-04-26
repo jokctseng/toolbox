@@ -234,8 +234,8 @@ function PollQuestion({ q, act, userId, lang }) {
 
   const toggle = (opt) => {
     if (submitted) return;
-    if (q.multipleChoice) {
-      const max = q.maxChoices || 99;
+    if (q.multiSelect) {
+      const max = q.maxSelect || 99;
       if (selected.includes(opt)) setSelected(s => s.filter(x => x !== opt));
       else if (selected.length < max) setSelected(s => [...s, opt]);
     } else {
@@ -294,7 +294,7 @@ function PollQuestion({ q, act, userId, lang }) {
 function WordCloudQuestion({ q, act, userId, lang }) {
   const [text, setText] = useState('');
   const charLimit = q.charLimit || 50;
-  const canMulti = q.allowMultiInput !== false;
+  const canMulti = q.multiInput !== false;
 
   const myResponses = (act.responses || []).filter(r => r.qId === q.id && r.userId === userId);
   const allResponses = (act.responses || []).filter(r => r.qId === q.id);
@@ -312,7 +312,7 @@ function WordCloudQuestion({ q, act, userId, lang }) {
   };
 
   // If AI grouping confirmed, show groups
-  const groups = q.confirmedGroups;
+  const groups = q.aiGroupDone ? q.groupResult : null;
 
   return (
     <div>
@@ -334,7 +334,7 @@ function WordCloudQuestion({ q, act, userId, lang }) {
                     );
                   })}
                 </div>
-                {q.groupVoteOpen && (
+                {q.voteOpen && (
                   <GroupVoteRow group={g} act={act} userId={userId} lang={lang} qId={q.id} gi={gi} />
                 )}
               </div>
@@ -369,7 +369,7 @@ function WordCloudQuestion({ q, act, userId, lang }) {
 }
 
 function GroupVoteRow({ group, act, userId, lang, qId, gi }) {
-  const votesPerPerson = act.questions?.find(q=>q.id===qId)?.votesPerPerson || 1;
+  const votesPerPerson = act.questions?.find(q=>q.id===qId)?.groupVoteMax || 1;
   const myVotes = (act.groupVotes || []).filter(v => v.qId === qId && v.userId === userId);
   const myVotesForGroup = myVotes.filter(v => v.gi === gi).length;
   const totalForGroup = (act.groupVotes || []).filter(v => v.qId === qId && v.gi === gi).length;
@@ -484,14 +484,14 @@ function ChallengeQuestion({ q, act, userId, lang }) {
 
   const submit = () => {
     let total = 0;
-    const qs = q.challengeQuestions || [];
+    const qs = q.questions || [];
     qs.forEach((cq, i) => {
       const ans = answers[i];
-      if (!ans) return;
-      if (q.hasCorrectAnswer) {
-        if (ans === cq.correctOption) total += cq.score || 0;
+      if (ans === undefined) return;
+      if (q.hasAnswer) {
+        if (Number(ans) === Number(cq.answer)) total += cq.score || 1;
       } else {
-        const opt = (cq.options || []).find(o => o.label === ans);
+        const opt = (cq.options || [])[Number(ans)];
         total += opt?.score || 0;
       }
     });
@@ -502,8 +502,8 @@ function ChallengeQuestion({ q, act, userId, lang }) {
     setScore(total);
     setSubmitted(true);
     // Find score mapping
-    if (q.scoreMapping) {
-      const m = q.scoreMapping.find(sm => total >= sm.min && total <= sm.max);
+    if (q.scoreMap) {
+      const m = q.scoreMap.find(sm => total >= sm.min && total <= sm.max);
       setMapping(m);
     }
   };
@@ -528,27 +528,27 @@ function ChallengeQuestion({ q, act, userId, lang }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {(q.challengeQuestions || []).map((cq, i) => (
+      {(q.questions || []).map((cq, i) => (
         <div key={i} style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 10, border: '1px solid var(--border)' }}>
-          <p style={{ fontWeight: 600, marginBottom: 12 }}>{i+1}. {cq.question}</p>
+          <p style={{ fontWeight: 600, marginBottom: 12 }}>{i+1}. {cq.text}</p>
           {cq.desc && <p style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 10 }}>{cq.desc}</p>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {(cq.options || []).map(opt => {
-              const label = typeof opt === 'string' ? opt : opt.label;
+              const label = typeof opt === 'string' ? opt : opt.text;
               return (
-                <button key={label} onClick={() => setAnswers(a => ({ ...a, [i]: label }))} style={{
+                <button key={`${label}-${i}`} onClick={() => setAnswers(a => ({ ...a, [i]: cq.options.indexOf(opt) }))} style={{
                   padding: '9px 14px', borderRadius: 8, textAlign: 'left', cursor: 'pointer',
-                  border: `2px solid ${answers[i] === label ? 'var(--accent)' : 'var(--border)'}`,
-                  background: answers[i] === label ? 'var(--accent-light)' : 'var(--surface)',
+                  border: `2px solid ${answers[i] === cq.options.indexOf(opt) ? 'var(--accent)' : 'var(--border)'}`,
+                  background: answers[i] === cq.options.indexOf(opt) ? 'var(--accent-light)' : 'var(--surface)',
                   color: 'var(--text)', fontFamily: 'var(--font-body)', fontSize: 14,
-                  fontWeight: answers[i] === label ? 600 : 400,
+                  fontWeight: answers[i] === cq.options.indexOf(opt) ? 600 : 400,
                 }}>{label}</button>
               );
             })}
           </div>
         </div>
       ))}
-      <Btn onClick={submit} disabled={Object.keys(answers).length < (q.challengeQuestions||[]).length} style={{ alignSelf: 'flex-end' }}>
+      <Btn onClick={submit} disabled={Object.keys(answers).length < (q.questions||[]).length} style={{ alignSelf: 'flex-end' }}>
         {lang === 'zh' ? '送出答案' : 'Submit Answers'}
       </Btn>
     </div>
@@ -573,7 +573,7 @@ function RankingDisplay({ q, act, userId, lang }) {
 }
 
 function InteractSection({ act, userId, lang }) {
-  const questions = (act.questions || []).filter(q => q.active);
+  const questions = (act.questions || []).filter(q => q.open);
   if (questions.length === 0) return (
     <p style={{ color: 'var(--text-3)', textAlign: 'center', padding: 24 }}>
       {lang === 'zh' ? '尚無開放互動題目' : 'No active questions yet'}

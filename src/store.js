@@ -1,10 +1,14 @@
 // KC Toolbox — Data Store
-// Demo: localStorage + BroadcastChannel (same browser)
-// Production: Replace with Supabase (see README for instructions)
+// Default: localStorage + BroadcastChannel.
+// Production: add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable
+// cross-device sync through the kc_store table described in README.md.
+
+import { supabase, hasSupabaseConfig } from './supabaseClient.js';
 
 const PFX = 'kc_';
+const TABLE = 'kc_store';
 
-export const db = {
+const local = {
   get: (key, def = null) => {
     try {
       const v = localStorage.getItem(PFX + key);
@@ -16,6 +20,68 @@ export const db = {
     catch { return false; }
   },
   del: (key) => { try { localStorage.removeItem(PFX + key); } catch {} },
+};
+
+const remoteEventName = 'kc_remote_sync';
+const localEventName = 'kc_local_broadcast';
+let remoteReady = false;
+
+const emitRemoteSync = (key = '') => {
+  window.dispatchEvent(new CustomEvent(remoteEventName, { detail: { key } }));
+};
+
+const pullRemote = async () => {
+  if (!supabase) return;
+  const { data, error } = await supabase.from(TABLE).select('key,value');
+  if (error) {
+    console.warn('[KC Toolbox] Supabase pull failed:', error.message);
+    return;
+  }
+  data?.forEach(row => local.set(row.key, row.value));
+  remoteReady = true;
+  emitRemoteSync();
+};
+
+const pushRemote = async (key, value) => {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from(TABLE)
+    .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+  if (error) console.warn('[KC Toolbox] Supabase push failed:', error.message);
+};
+
+const deleteRemote = async (key) => {
+  if (!supabase) return;
+  const { error } = await supabase.from(TABLE).delete().eq('key', key);
+  if (error) console.warn('[KC Toolbox] Supabase delete failed:', error.message);
+};
+
+if (hasSupabaseConfig) {
+  pullRemote();
+  supabase
+    .channel('kc-store-changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, payload => {
+      const key = payload.new?.key || payload.old?.key;
+      if (!key) return;
+      if (payload.eventType === 'DELETE') local.del(key);
+      else local.set(key, payload.new.value);
+      emitRemoteSync(key);
+    })
+    .subscribe(status => {
+      if (status === 'SUBSCRIBED' && !remoteReady) pullRemote();
+    });
+}
+
+export const db = {
+  get: (key, def = null) => {
+    return local.get(key, def);
+  },
+  set: (key, val) => {
+    const ok = local.set(key, val);
+    if (ok) pushRemote(key, val);
+    return ok;
+  },
+  del: (key) => { local.del(key); deleteRemote(key); },
   keys: (prefix = '') => {
     try {
       return Object.keys(localStorage)
@@ -38,15 +104,34 @@ const getChannel = () => {
 };
 
 export const broadcast = (type, payload) => {
-  getChannel()?.postMessage({ type, payload, ts: Date.now() });
+  const message = { type, payload, ts: Date.now() };
+  getChannel()?.postMessage(message);
+  window.dispatchEvent(new CustomEvent(localEventName, { detail: message }));
 };
 
 export const onBroadcast = (handler) => {
   const ch = getChannel();
-  if (!ch) return () => {};
+  const onRemoteSync = (event) => {
+    const key = event.detail?.key || '';
+    handler({ type: 'remote_sync', payload: key, ts: Date.now() });
+    if (!key || key.startsWith('qa_')) handler({ type: 'qa_update', payload: key, ts: Date.now() });
+    if (!key || key.startsWith('co_')) handler({ type: 'co_update', payload: key, ts: Date.now() });
+    if (!key || key === 'queue') handler({ type: 'queue_update', payload: db.get('queue'), ts: Date.now() });
+  };
+  window.addEventListener(remoteEventName, onRemoteSync);
+  const onLocalBroadcast = (event) => handler(event.detail);
+  window.addEventListener(localEventName, onLocalBroadcast);
+  if (!ch) return () => {
+    window.removeEventListener(remoteEventName, onRemoteSync);
+    window.removeEventListener(localEventName, onLocalBroadcast);
+  };
   const h = (e) => handler(e.data);
   ch.addEventListener('message', h);
-  return () => ch.removeEventListener('message', h);
+  return () => {
+    ch.removeEventListener('message', h);
+    window.removeEventListener(remoteEventName, onRemoteSync);
+    window.removeEventListener(localEventName, onLocalBroadcast);
+  };
 };
 
 // OTP system (client-side, hash-based)
@@ -60,7 +145,9 @@ async function sha256(text) {
 }
 
 export async function generateOTP(namespace = 'default') {
-  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const bytes = new Uint32Array(1);
+  crypto.getRandomValues(bytes);
+  const code = String(100000 + (bytes[0] % 900000));
   const hash = await sha256(code + namespace);
   const expiry = Date.now() + 24 * 60 * 60 * 1000; // 24h
   const store = db.get(OTP_KEY, {});

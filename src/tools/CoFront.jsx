@@ -267,8 +267,78 @@ function NotesTab({ act, userId, nick, lang }) {
 }
 
 // ─── Strategy Board ───────────────────────────────────────────────────────────
+const parseCsvText = (text) => {
+  const rows = text.trim().split(/\r?\n/).map(line =>
+    line.split(',').map(cell => cell.trim().replace(/^"|"$/g, ''))
+  ).filter(row => row.length && row.some(Boolean));
+  if (rows.length < 2) return { headers: [], rows: [] };
+  const headers = rows[0];
+  return {
+    headers,
+    rows: rows.slice(1).map(row => Object.fromEntries(headers.map((h, i) => [h || `欄位${i + 1}`, row[i] ?? '']))),
+  };
+};
+
+const parseDataFile = (text, name = '') => {
+  if (/\.json$/i.test(name)) {
+    const parsed = JSON.parse(text);
+    const arr = Array.isArray(parsed) ? parsed : Object.values(parsed).find(Array.isArray) || [];
+    const rows = arr.filter(v => v && typeof v === 'object');
+    return { headers: [...new Set(rows.flatMap(row => Object.keys(row)))], rows };
+  }
+  return parseCsvText(text);
+};
+
+const numericColumns = (data) => data.headers.filter(h =>
+  data.rows.some(row => row[h] !== '' && !Number.isNaN(Number(row[h])))
+);
+
+const categoryColumns = (data) => data.headers.filter(h =>
+  !numericColumns(data).includes(h) && new Set(data.rows.map(row => row[h]).filter(Boolean)).size <= Math.max(20, data.rows.length * 0.6)
+);
+
+const summarizeColumn = (rows, column) => {
+  const values = rows.map(row => Number(row[column])).filter(v => !Number.isNaN(v));
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const sum = values.reduce((a, b) => a + b, 0);
+  const avg = sum / values.length;
+  return {
+    count: values.length,
+    sum,
+    avg,
+    min: sorted[0],
+    max: sorted[sorted.length - 1],
+    q1: sorted[Math.floor((sorted.length - 1) * 0.25)],
+    q3: sorted[Math.floor((sorted.length - 1) * 0.75)],
+  };
+};
+
+const makeBarSvg = (items, title) => {
+  const width = 720;
+  const rowHeight = 34;
+  const height = 72 + items.length * rowHeight;
+  const max = Math.max(...items.map(i => i.value), 1);
+  const bars = items.map((item, i) => {
+    const y = 52 + i * rowHeight;
+    const barW = Math.max(4, Math.round((item.value / max) * 420));
+    return `<text x="18" y="${y + 18}" font-size="13" fill="currentColor">${escapeXml(String(item.label).slice(0, 26))}</text>
+      <rect x="220" y="${y}" width="${barW}" height="22" rx="6" fill="#0d9488"></rect>
+      <text x="${230 + barW}" y="${y + 16}" font-size="12" fill="currentColor">${item.value}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(title)}" style="width:100%;max-width:${width}px;height:auto;background:var(--surface-2);border-radius:12px;padding:10px">
+    <text x="18" y="28" font-size="18" font-weight="700" fill="currentColor">${escapeXml(title)}</text>${bars}</svg>`;
+};
+
+const escapeXml = (text) => text
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
+
 function StrategyTab({ act, userId, nick, lang }) {
   const [file, setFile] = useState(null);
+  const [dataset, setDataset] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [selected, setSelected] = useState([]);
@@ -289,23 +359,53 @@ function StrategyTab({ act, userId, nick, lang }) {
     setAnalyzing(true);
     setSuggestions([]);
     try {
-      // Read file as text/base64
       const text = await f.text().catch(() => '');
-      const prompt = `You are a data analyst. Based on this file content (name: ${f.name}, type: ${f.type}), suggest 3-5 analyses or chart types that would be useful. Respond ONLY with JSON:
-{"suggestions":[{"id":"1","title":"Analysis Title","desc":"What this shows","type":"bar|line|pie|table|summary"}]}
-
-File content preview:
-${text.slice(0, 2000)}`;
-
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1000, messages: [{ role: 'user', content: prompt }] }),
-      });
-      const data = await res.json();
-      const raw = data.content?.find(c => c.type === 'text')?.text || '';
-      const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
-      setSuggestions(parsed.suggestions || []);
+      const data = parseDataFile(text, f.name);
+      setDataset(data);
+      const nums = numericColumns(data);
+      const cats = categoryColumns(data);
+      const next = [];
+      if (data.rows.length) {
+        next.push({
+          id: 'profile',
+          type: 'profile',
+          title: lang === 'zh' ? '資料概況與缺漏檢查' : 'Data Profile and Missing Values',
+          desc: lang === 'zh' ? `檢查 ${data.rows.length} 筆資料、${data.headers.length} 個欄位的基本品質。` : `Review ${data.rows.length} rows and ${data.headers.length} columns.`,
+        });
+      }
+      if (nums.length) {
+        next.push({
+          id: 'stats',
+          type: 'stats',
+          title: lang === 'zh' ? '數值欄位統計摘要' : 'Numeric Summary',
+          desc: lang === 'zh' ? `計算 ${nums.join('、')} 的平均、最小最大值與 Q1/Q3。` : `Calculate average, min/max and Q1/Q3 for ${nums.join(', ')}.`,
+        });
+      }
+      if (cats.length) {
+        next.push({
+          id: 'freq',
+          type: 'freq',
+          title: lang === 'zh' ? '類別分布長條圖' : 'Category Distribution Bar Chart',
+          desc: lang === 'zh' ? `依 ${cats[0]} 彙整出現次數並生成圖表。` : `Aggregate counts by ${cats[0]} and render a chart.`,
+          category: cats[0],
+        });
+      }
+      if (cats.length && nums.length) {
+        next.push({
+          id: 'grouped',
+          type: 'grouped',
+          title: lang === 'zh' ? '分組數值比較' : 'Grouped Numeric Comparison',
+          desc: lang === 'zh' ? `依 ${cats[0]} 比較 ${nums[0]} 的平均值。` : `Compare average ${nums[0]} by ${cats[0]}.`,
+          category: cats[0],
+          numeric: nums[0],
+        });
+      }
+      setSuggestions(next.length ? next : [{
+        id: 'summary',
+        type: 'summary',
+        title: lang === 'zh' ? '文字資料摘要' : 'Text Summary',
+        desc: lang === 'zh' ? '此檔案不易解析成表格，先整理可讀摘要。' : 'This file is not tabular; generate a readable summary.',
+      }]);
     } catch (e) {
       setSuggestions([{ id: '1', title: lang === 'zh' ? '資料摘要' : 'Data Summary', desc: lang === 'zh' ? '根據上傳資料生成摘要' : 'Generate summary from uploaded data', type: 'summary' }]);
     }
@@ -317,16 +417,39 @@ ${text.slice(0, 2000)}`;
     setRunningIdx(suggestion.id);
     try {
       const text = await file.text().catch(() => '');
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514', max_tokens: 1000,
-          messages: [{ role: 'user', content: `Perform this analysis on the data: "${suggestion.title} - ${suggestion.desc}"\n\nFile: ${file.name}\nContent:\n${text.slice(0, 3000)}\n\nProvide a clear, concise analysis result in markdown format.` }],
-        }),
-      });
-      const data = await res.json();
-      const content = data.content?.find(c => c.type === 'text')?.text || '';
+      const data = dataset || parseDataFile(text, file.name);
+      let content = '';
+      if (suggestion.type === 'profile') {
+        const missing = data.headers.map(h => `${h}: ${data.rows.filter(row => !row[h]).length}`).join('<br>');
+        content = `<div class="markdown-body"><h3>${lang === 'zh' ? '資料概況' : 'Data Profile'}</h3><p>${data.rows.length} rows, ${data.headers.length} columns.</p><p>${missing}</p></div>`;
+      } else if (suggestion.type === 'stats') {
+        const rows = numericColumns(data).map(col => {
+          const s = summarizeColumn(data.rows, col);
+          return `<tr><td>${escapeXml(col)}</td><td>${s.count}</td><td>${s.avg.toFixed(2)}</td><td>${s.min}</td><td>${s.q1}</td><td>${s.q3}</td><td>${s.max}</td></tr>`;
+        }).join('');
+        content = `<table class="data-table"><thead><tr><th>欄位</th><th>N</th><th>平均</th><th>Min</th><th>Q1</th><th>Q3</th><th>Max</th></tr></thead><tbody>${rows}</tbody></table>`;
+      } else if (suggestion.type === 'freq') {
+        const counts = {};
+        data.rows.forEach(row => { const key = row[suggestion.category] || '(blank)'; counts[key] = (counts[key] || 0) + 1; });
+        const items = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([label, value]) => ({ label, value }));
+        content = makeBarSvg(items, suggestion.title);
+      } else if (suggestion.type === 'grouped') {
+        const groups = {};
+        data.rows.forEach(row => {
+          const key = row[suggestion.category] || '(blank)';
+          const value = Number(row[suggestion.numeric]);
+          if (Number.isNaN(value)) return;
+          groups[key] = groups[key] || [];
+          groups[key].push(value);
+        });
+        const items = Object.entries(groups).map(([label, values]) => ({
+          label,
+          value: Number((values.reduce((a, b) => a + b, 0) / values.length).toFixed(2)),
+        })).sort((a, b) => b.value - a.value).slice(0, 12);
+        content = makeBarSvg(items, suggestion.title);
+      } else {
+        content = `<div class="markdown-body"><h3>${escapeXml(file.name)}</h3><p>${escapeXml(text.slice(0, 1200))}</p></div>`;
+      }
       setResults(prev => [...prev, { id: uid(), suggestionId: suggestion.id, title: suggestion.title, content, ts: Date.now() }]);
     } catch (e) { }
     setRunningIdx(null);
@@ -386,8 +509,8 @@ ${text.slice(0, 2000)}`;
               {lang === 'zh' ? '公開分享' : 'Publish'}
             </Btn>
           </div>
-          <div style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--text-2)' }}
-            dangerouslySetInnerHTML={{ __html: mdToHtml(r.content) }} />
+          <div style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--text-2)', overflowX: 'auto' }}
+            dangerouslySetInnerHTML={{ __html: r.content.trim().startsWith('<') ? r.content : mdToHtml(r.content) }} />
         </Card>
       ))}
 
@@ -399,7 +522,7 @@ ${text.slice(0, 2000)}`;
             <Card key={c.id} style={{ marginBottom: 12 }}>
               {c.title && <h5 style={{ fontSize: 15, marginBottom: 4 }}>{c.title}</h5>}
               {c.desc && <p style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 8 }}>{c.desc}</p>}
-              <div style={{ fontSize: 13, lineHeight: 1.7 }} dangerouslySetInnerHTML={{ __html: mdToHtml(c.content) }} />
+              <div style={{ fontSize: 13, lineHeight: 1.7, overflowX: 'auto' }} dangerouslySetInnerHTML={{ __html: c.content.trim().startsWith('<') ? c.content : mdToHtml(c.content) }} />
               {c.contributor && (
                 <p style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
                   — {c.contributor}
@@ -492,8 +615,12 @@ function DashboardTab({ act, userId, lang }) {
 
   const submitQ = () => {
     if (!newQ.trim() || !act.allowUserQuestions) return;
+    const parts = newQ.split('-').map(s => s.trim());
+    const parsed = parts.length >= 3
+      ? { group: parts[0], num: parts[1], text: parts.slice(2).join('-').trim() }
+      : { group: newQGroup, num: '', text: newQ.trim() };
     const list = db.get(`co_dashboard_${act.id}`, act.dashboardQuestions || []);
-    list.push({ id: uid(), text: newQ.trim(), group: newQGroup, ts: Date.now(), userSubmitted: true });
+    list.push({ id: uid(), text: parsed.text, num: parsed.num, group: parsed.group, ts: Date.now(), userSubmitted: true });
     db.set(`co_dashboard_${act.id}`, list);
     broadcast('co_update', {});
     setLocalQs(db.get(`co_dashboard_${act.id}`, []));
@@ -553,6 +680,13 @@ function DashboardTab({ act, userId, lang }) {
           <textarea value={newQ} onChange={e => setNewQ(e.target.value)} rows={2}
             placeholder={lang === 'zh' ? '例：設計-01-如何解決現有流程痛點？' : 'e.g. Design-01-How to solve current pain points?'}
             style={{ width: '100%', padding: '8px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 7, fontSize: 13, color: 'var(--text)', resize: 'none' }} />
+          {hasGroups && (
+            <select value={newQGroup} onChange={e => setNewQGroup(e.target.value)}
+              style={{ marginTop: 8, padding: '7px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 7, fontSize: 13, color: 'var(--text)', width: '100%' }}>
+              <option value="">{lang === 'zh' ? '未指定分組（或用 分組-編號-問題 格式）' : 'No group (or use Group-Number-Question)'}</option>
+              {(act.groups || []).map(g => <option key={g.name} value={g.name}>{g.name}</option>)}
+            </select>
+          )}
           <Btn size="sm" onClick={submitQ} style={{ marginTop: 8 }}>{lang === 'zh' ? '提交' : 'Submit'}</Btn>
         </Card>
       )}

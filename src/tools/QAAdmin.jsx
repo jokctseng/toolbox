@@ -8,6 +8,7 @@ import {
   Btn, Card, Modal, Inp, NumInp, Toggle, Badge, Tabs, DragList, Confirm, SectionHead, Empty, Spinner, Progress,
 } from '../components/UI.jsx';
 import { useLang, nav } from '../App.jsx';
+import AdminLogin from '../components/AdminLogin.jsx';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 const MAX_ACTIVITIES = 10;
@@ -249,12 +250,19 @@ function ResourceEditor({ items, onChange, lang }) {
   const add = () => onChange([...items, { id: uid(), type: '', name: '', url: '', desc: '' }]);
   const update = (id, field, val) => onChange(items.map(i => i.id === id ? { ...i, [field]: val } : i));
   const remove = (id) => onChange(items.filter(i => i.id !== id));
+  const move = (idx, dir) => {
+    const to = idx + dir;
+    if (to < 0 || to >= items.length) return;
+    const arr = [...items];
+    [arr[idx], arr[to]] = [arr[to], arr[idx]];
+    onChange(arr);
+  };
 
   const COLORS = ['teal', 'blue', 'amber', 'green', 'purple', 'red', 'gray'];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {items.map((item) => (
+      {items.map((item, idx) => (
         <div key={item.id} style={{ background: 'var(--surface-2)', borderRadius: 8, padding: 12, border: '1px solid var(--border)' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr', gap: 8, marginBottom: 8 }}>
             <input value={item.type} onChange={e => update(item.id, 'type', e.target.value)}
@@ -271,6 +279,8 @@ function ResourceEditor({ items, onChange, lang }) {
             <input value={item.desc} onChange={e => update(item.id, 'desc', e.target.value)}
               placeholder={lang === 'zh' ? '滑鼠移過去的說明（選填）' : 'Tooltip description (optional)'}
               style={{ padding: '6px 8px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, color: 'var(--text)', flex: 1 }} />
+            <button onClick={() => move(idx, -1)} disabled={idx === 0} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, opacity: idx === 0 ? .35 : 1 }}>↑</button>
+            <button onClick={() => move(idx, 1)} disabled={idx === items.length - 1} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, opacity: idx === items.length - 1 ? .35 : 1 }}>↓</button>
             <button onClick={() => remove(item.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 16 }}>✕</button>
           </div>
         </div>
@@ -624,7 +634,7 @@ ${words}`,
         const freq = wordFrequency(entries.map(e => e.text));
         rows.push([q.title]);
         rows.push([lang === 'zh' ? '詞' : 'Word', lang === 'zh' ? '頻率' : 'Freq']);
-        freq.forEach(([w, c]) => rows.push([w, c]));
+        freq.forEach(({ word, count }) => rows.push([word, count]));
       }
     } else if (q.type === 'idea') {
       const ideas = db.get(`qa_ideas_${actId}_${q.id}`, []);
@@ -659,9 +669,9 @@ ${words}`,
   };
 
   // QnA management
-  const qnaItems = act.qna || [];
-  const deleteMsg = (id) => updateAct({ qna: qnaItems.filter(q => q.id !== id) });
-  const toggleHide = (id) => updateAct({ qna: qnaItems.map(q => q.id === id ? { ...q, hidden: !q.hidden } : q) });
+  const qnaItems = act.posts || [];
+  const deleteMsg = (id) => updateAct({ posts: qnaItems.filter(q => q.id !== id && q.parentId !== id) });
+  const toggleHide = (id) => updateAct({ posts: qnaItems.map(q => q.id === id ? { ...q, hidden: !q.hidden } : q) });
 
   const TABS = [
     { key: 'basic', label: lang === 'zh' ? '基本設定' : 'Basic' },
@@ -868,7 +878,7 @@ ${words}`,
                       <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{new Date(msg.ts).toLocaleTimeString()}</span>
                       {msg.hidden && <Badge color="red">{lang === 'zh' ? '已隱藏' : 'Hidden'}</Badge>}
                     </div>
-                    <p style={{ fontSize: 14, lineHeight: 1.5 }}>{msg.text}</p>
+                    <p style={{ fontSize: 14, lineHeight: 1.5 }}>{msg.content}</p>
                     <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
                       👍 {msg.likes || 0} · 👎 {msg.dislikes || 0}
                     </div>
@@ -901,8 +911,9 @@ ${words}`,
 export default function QAAdmin() {
   const [authed, setAuthed] = useState(() => checkSession('qa_admin'));
   const [editId, setEditId] = useState(null);
+  const { lang } = useLang();
 
-  if (!authed) return <OTPLogin onLogin={() => setAuthed(true)} />;
+  if (!authed) return <AdminLogin namespace="qa_admin" lang={lang} title={lang === 'zh' ? '互動問答後台' : 'Q&A Admin'} onLogin={() => setAuthed(true)} />;
   if (editId) return <ActivityEditor actId={editId} onBack={() => setEditId(null)} />;
   return (
     <ActivityList

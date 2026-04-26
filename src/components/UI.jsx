@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 // --- Btn ---
-export function Btn({ children, onClick, variant = 'primary', size = 'md', disabled, className = '', style, type = 'button', ...rest }) {
+export function Btn({ children, onClick, variant = 'primary', size = 'md', disabled, loading, className = '', style, type = 'button', ...rest }) {
   const base = {
     display: 'inline-flex', alignItems: 'center', gap: 6,
-    border: 'none', borderRadius: 'var(--radius-sm)', cursor: disabled ? 'not-allowed' : 'pointer',
+    border: 'none', borderRadius: 'var(--radius-sm)', cursor: disabled || loading ? 'not-allowed' : 'pointer',
     fontFamily: 'var(--font-body)', fontWeight: 600, transition: 'var(--trans)',
     whiteSpace: 'nowrap', userSelect: 'none',
     opacity: disabled ? 0.55 : 1,
@@ -21,9 +21,9 @@ export function Btn({ children, onClick, variant = 'primary', size = 'md', disab
     link: { background: 'transparent', color: 'var(--accent)', padding: 0, fontWeight: 500 },
   };
   return (
-    <button type={type} onClick={disabled ? undefined : onClick}
+    <button type={type} onClick={disabled || loading ? undefined : onClick}
       style={{ ...base, ...variants[variant], ...style }} className={className} {...rest}>
-      {children}
+      {loading ? '…' : children}
     </button>
   );
 }
@@ -46,7 +46,7 @@ export function Card({ children, style, className = '', onClick, padding = 20 })
 }
 
 // --- Modal ---
-export function Modal({ open, onClose, title, children, width = 540, footer }) {
+export function Modal({ open, onClose, title, children, width = 540, footer, bodyStyle }) {
   useEffect(() => {
     if (open) document.body.style.overflow = 'hidden';
     else document.body.style.overflow = '';
@@ -56,14 +56,16 @@ export function Modal({ open, onClose, title, children, width = 540, footer }) {
   return (
     <div onClick={onClose} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
       zIndex: 1000, padding: 16, backdropFilter: 'blur(4px)',
+      overflowY: 'auto',
     }}>
       <div onClick={e => e.stopPropagation()} style={{
         background: 'var(--surface)', borderRadius: 'var(--radius-xl)',
         boxShadow: 'var(--shadow-lg)', width: '100%', maxWidth: width,
-        maxHeight: '92vh', display: 'flex', flexDirection: 'column',
+        maxHeight: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column',
         animation: 'scaleIn .2s ease',
+        margin: 'min(6vh, 48px) 0',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '18px 24px 0', flexShrink: 0 }}>
@@ -73,7 +75,7 @@ export function Modal({ open, onClose, title, children, width = 540, footer }) {
             color: 'var(--text-3)', marginLeft: 'auto', lineHeight: 1, padding: 4,
           }}>✕</button>
         </div>
-        <div style={{ padding: '16px 24px', overflowY: 'auto', flex: 1 }}>{children}</div>
+        <div style={{ padding: '16px 24px', overflowY: 'auto', flex: 1, minHeight: 0, ...bodyStyle }}>{children}</div>
         {footer && <div style={{ padding: '0 24px 18px', flexShrink: 0 }}>{footer}</div>}
       </div>
     </div>
@@ -206,7 +208,7 @@ export function TimeInput({ value, onChange, label }) {
   return (
     <div>
       {label && <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', marginBottom: 6 }}>{label}</div>}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         {field('時 h', h, 'h', 23)}
         <span style={{ color: 'var(--text-3)', fontSize: 20, paddingBottom: 18 }}>:</span>
         {field('分 m', m, 'm', 59)}
@@ -305,11 +307,12 @@ export function Progress({ value, max, color = 'var(--accent)', height = 6 }) {
 }
 
 // --- Section heading ---
-export function SectionHead({ title, actions, desc }) {
+export function SectionHead({ title, actions, desc, children }) {
+  const heading = title ?? children;
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-        <h2 style={{ fontSize: 20 }}>{title}</h2>
+        <h2 style={{ fontSize: 20 }}>{heading}</h2>
         {actions && <div style={{ display: 'flex', gap: 8 }}>{actions}</div>}
       </div>
       {desc && <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 4 }}>{desc}</p>}

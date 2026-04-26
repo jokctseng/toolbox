@@ -231,65 +231,51 @@ export default function Queue() {
         </div>
       </Card>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.4fr', gap: 16 }}>
-        {/* Master list */}
-        <Card style={{ maxHeight: 480, overflow: 'auto' }}>
-          <h4 style={{ fontSize: 14, color: 'var(--text-2)', marginBottom: 12 }}>
-            📄 {t('qTotalList')} ({q.master.length})
-          </h4>
-          {q.master.length === 0 ? <p style={{ fontSize: 13, color: 'var(--text-3)' }}>{t('qEmpty')}</p> :
-            q.master.map(p => (
-              <PersonCard key={p.id} person={p} actions={[
-                <button key="del" onClick={() => removeFromMaster(p.id)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 14 }}>✕</button>
-              ]} />
-            ))
-          }
-        </Card>
-
+      <div className="queue-main-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, .8fr) minmax(360px, 1.35fr)', gap: 16, alignItems: 'stretch' }}>
         {/* Waiting */}
-        <Card style={{ maxHeight: 480, overflow: 'auto' }}>
-          <h4 style={{ fontSize: 14, color: 'var(--warm)', marginBottom: 12 }}>
-            ⏳ {t('qWaiting')} ({q.waiting.length}/{settings.waitingMax})
+        <Card style={{ maxHeight: 560, overflow: 'auto', background: 'var(--warm-light)' }}>
+          <h4 style={{ fontSize: 16, color: 'var(--warm)', marginBottom: 12, fontWeight: 800 }}>
+            ⏳ {t('qWaiting')} <span style={{ fontFamily: 'var(--font-body)', fontWeight: 600 }}>({q.waiting.length}/{settings.waitingMax})</span>
           </h4>
           {q.waiting.length === 0 ? <p style={{ fontSize: 13, color: 'var(--text-3)' }}>{t('qEmpty')}</p> :
             q.waiting.map(p => (
-              <PersonCard key={p.id} person={p} />
+              <PersonCard key={p.id} person={p} size="lg" />
             ))
           }
         </Card>
 
         {/* Calling zone — most prominent */}
-        <Card style={{ background: 'linear-gradient(135deg, var(--accent-light), var(--surface))' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <h4 style={{ fontSize: 15, color: 'var(--accent)', fontWeight: 700 }}>
-              📣 {t('qCalling')} ({q.calling.length}/{settings.callCount})
+        <Card style={{ background: 'linear-gradient(135deg, var(--accent-light), var(--surface))', minHeight: 360 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
+            <h4 style={{ fontSize: 20, color: 'var(--accent)', fontWeight: 800 }}>
+              📣 {t('qCalling')} <span style={{ fontFamily: 'var(--font-body)', fontWeight: 600 }}>({q.calling.length}/{settings.callCount})</span>
             </h4>
-            <Btn onClick={callNext} size="sm">
+            <Btn onClick={callNext} size="lg">
               {lang === 'zh' ? '叫下一位 ▶' : 'Call Next ▶'}
             </Btn>
           </div>
 
           {q.calling.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-3)' }}>
-              <p style={{ fontSize: 32 }}>—</p>
+            <div style={{ textAlign: 'center', padding: '64px 0', color: 'var(--text-3)' }}>
+              <p style={{ fontSize: 44 }}>—</p>
             </div>
           ) : q.calling.map(p => (
             <div key={p.id} style={{
-              padding: '14px 16px', background: 'var(--accent)', borderRadius: 12,
-              marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '18px 20px', background: 'var(--accent)', borderRadius: 14,
+              marginBottom: 12, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', alignItems: 'center', gap: 14,
+              boxShadow: 'var(--shadow)',
             }}>
-              <span style={{ fontSize: 22, fontWeight: 800, color: '#fff', fontFamily: 'var(--font-display)' }}>
+              <span style={{ fontSize: 'clamp(24px, 4vw, 42px)', fontWeight: 800, color: '#fff', fontFamily: 'var(--font-display)', lineHeight: 1.1, wordBreak: 'break-word' }}>
                 {p.label}
               </span>
-              <div style={{ display: 'flex', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                 <button onClick={() => markDone(p.id)} style={{
-                  padding: '5px 12px', background: '#fff', border: 'none',
-                  borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 13, color: 'var(--accent)',
+                  padding: '9px 15px', background: '#fff', border: 'none',
+                  borderRadius: 8, cursor: 'pointer', fontWeight: 800, fontSize: 14, color: 'var(--accent)',
                 }}>✓ {lang === 'zh' ? '完成' : 'Done'}</button>
                 <button onClick={() => skip(p.id)} style={{
-                  padding: '5px 8px', background: 'rgba(255,255,255,.2)', border: 'none',
-                  borderRadius: 6, cursor: 'pointer', fontSize: 13, color: '#fff',
+                  padding: '9px 11px', background: 'rgba(255,255,255,.2)', border: 'none',
+                  borderRadius: 8, cursor: 'pointer', fontSize: 13, color: '#fff',
                 }}>↩</button>
               </div>
             </div>
@@ -314,6 +300,27 @@ export default function Queue() {
           </div>
         </Card>
       </div>
+
+      {/* Master list */}
+      <details style={{ marginTop: 16 }}>
+        <summary style={{
+          padding: '12px 16px', background: 'var(--surface)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)', cursor: 'pointer', fontWeight: 700, color: 'var(--text-2)',
+          boxShadow: 'var(--shadow-sm)',
+        }}>
+          📄 {t('qTotalList')} ({q.master.length})
+        </summary>
+        <Card style={{ maxHeight: 280, overflow: 'auto', marginTop: 8 }}>
+          {q.master.length === 0 ? <p style={{ fontSize: 13, color: 'var(--text-3)' }}>{t('qEmpty')}</p> :
+            q.master.map(p => (
+              <PersonCard key={p.id} person={p} actions={[
+                <button key="del" onClick={() => removeFromMaster(p.id)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: 14 }}>✕</button>
+              ]} />
+            ))
+          }
+        </Card>
+      </details>
 
       {/* Import Modal */}
       <Modal open={showImport} onClose={() => setShowImport(false)}

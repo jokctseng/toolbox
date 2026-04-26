@@ -1,5 +1,5 @@
-/* KC Toolbox Service Worker - Background Timer */
-const VERSION = 'v1';
+/* KC Toolbox Service Worker - Background Timer + deployment-safe cache */
+const VERSION = 'v2';
 const CACHE = 'kc-toolbox-' + VERSION;
 
 self.addEventListener('install', e => {
@@ -14,19 +14,27 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Cache app shell for offline
+const shouldCache = request => {
+  const url = new URL(request.url);
+  return url.origin === self.location.origin;
+};
+
+// Network-first keeps GitHub Pages deployments from serving old JS/CSS forever.
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  if (!shouldCache(e.request)) return;
+
   e.respondWith(
-    caches.open(CACHE).then(cache =>
-      cache.match(e.request).then(cached => {
-        const fresh = fetch(e.request).then(res => {
-          if (res.ok) cache.put(e.request, res.clone());
-          return res;
-        }).catch(() => cached);
-        return cached || fresh;
-      })
-    )
+    caches.open(CACHE).then(async cache => {
+      const cached = await cache.match(e.request);
+      try {
+        const fresh = await fetch(e.request);
+        if (fresh.ok) await cache.put(e.request, fresh.clone());
+        return fresh;
+      } catch {
+        return cached || Response.error();
+      }
+    })
   );
 });
 
@@ -41,7 +49,6 @@ self.addEventListener('message', e => {
   if (e.data?.type === 'TIMER_ALERT') {
     self.registration.showNotification(e.data.title || 'KC 計時器', {
       body: e.data.body || '時間到！',
-      icon: '/favicon.svg',
       tag: 'timer-' + (e.data.id || 0),
       renotify: true,
     });
